@@ -1,83 +1,52 @@
 import express from "express";
-import path from "path";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import fetch from "node-fetch";
 
 const app = express();
 app.use(express.json({ limit: "20mb" }));
-
-// --- live console connections ---
-const clients = new Set();
-app.get("/events", (req, res) => {
-  res.set({
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-  });
-  res.flushHeaders();
-  clients.add(res);
-  req.on("close", () => clients.delete(res));
-});
-function broadcast(data) {
-  for (const r of clients) r.write(`data: ${JSON.stringify(data)}\n\n`);
-}
-
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const PORT = process.env.PORT || 10000;
 
-// --- AI proxy ---
 app.post("/ask", async (req, res) => {
   try {
-    const { imageBase64, speedInfo } = req.body || {};
-    if (!imageBase64) return res.status(400).json({ error: "Missing imageBase64" });
+    const { imageBase64 } = req.body;
+    if (!imageBase64) return res.status(400).json({ error: "No image" });
 
-    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: "Missing API key" });
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "Authorization": `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o",
-        temperature: 0,
-        max_tokens: 180,
+        model: "gpt-4o-mini",
         messages: [
-          {
-            role: "system",
-            content:
-              "Use spatial layout and numerical reasoning. Never guess. Return strict JSON only.",
-          },
           {
             role: "user",
             content: [
-              { type: "text", text: "Solve and return strict JSON only." },
               {
-                type: "image_url",
-                image_url: { url: `data:image/png;base64,${imageBase64}` },
+                type: "input_text",
+                text: "Read the question in this image and give only the correct answer with a short rationale in JSON: {\"answer\": \"\", \"rationale\": \"\"}. Do not guess if unclear."
               },
+              {
+                type: "input_image",
+                image_url: `data:image/png;base64,${imageBase64}`
+              }
             ],
           },
         ],
-        response_format: { type: "json_object" },
+        max_tokens: 300,
       }),
     });
 
-    const text = await r.text();
-    if (!text) throw new Error("Empty AI response");
-    res.status(r.status).type("application/json").send(text);
-
-    broadcast({
-      type: "answer",
-      payload: text,
-      internet: speedInfo,
-      timestamp: Date.now(),
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+    const data = await response.json();
+    return res.json(data);
+  } catch (err) {
+    console.error("Server error:", err);
+    res.status(500).json({ error: err.message || "Server error" });
   }
 });
 
-app.use(express.static(path.join(__dirname, "public")));
-app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+app.get("/", (_, res) => res.send("Server running."));
+app.listen(PORT, () => console.log(`✅ Server listening on port ${PORT}`));
