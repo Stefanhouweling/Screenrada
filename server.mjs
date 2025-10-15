@@ -65,9 +65,9 @@ app.post("/ask", async (req, res) => {
     });
 
     const text = await r.text();
+    if (!text) throw new Error("Empty AI response");
     res.status(r.status).type("application/json").send(text);
 
-    // broadcast result to all consoles
     broadcast({
       type: "answer",
       payload: text,
