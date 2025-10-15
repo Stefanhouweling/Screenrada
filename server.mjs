@@ -36,29 +36,40 @@ app.post("/ask", async (req, res) => {
             content: `You are a math problem solver. Read the question carefully and solve it step-by-step.
 
 Instructions:
-1) Extract ONLY the question text (ignore answer choices)
-2) Identify what the question is asking for (read carefully - "how much MORE" means find the DIFFERENCE)
-3) Solve the problem step-by-step
-4) Return ONLY the final answer to the specific question asked
+1) Extract the question text AND all multiple choice options
+2) Identify what the question is asking for (keywords: "more", "less", "difference", "solve for")
+3) Solve the problem step-by-step mathematically
+4) CRITICAL: Check if your answer matches any of the multiple choice options
+5) If no exact match, convert your answer to match the format of the options:
+   - Convert fractions to different denominators (e.g., 1 6/7 = 1 42/49)
+   - Convert decimals to fractions or vice versa
+   - Simplify or expand as needed
+6) Return the answer in the format that matches the options
 
 Return STRICT JSON:
 {
  "question": "extracted question text",
- "answer": "final numeric answer only",
- "work": "step-by-step calculation"
+ "options": ["A. ...", "B. ...", "C. ...", "D. ..."],
+ "calculated_answer": "your calculated result",
+ "answer": "final answer matching option format",
+ "matched_option": "letter of matching option (A/B/C/D) or null",
+ "work": "step-by-step calculation including conversion if needed"
 }
 
 CRITICAL: 
-- Ignore all multiple choice options completely
-- Pay attention to keywords: "more", "less", "difference", "increase", "decrease"
-- If asking "how much more", subtract to find the difference
-- Return ONLY the final number that answers the specific question
-- Show ALL steps in your work`
+- Always extract the multiple choice options
+- Solve the problem first, then check options
+- If your answer doesn't match, try converting:
+  * 1 6/7 with denominator 7 → multiply by 7/7 → 1 42/49
+  * 0.5 → 1/2 or 2/4 depending on options
+  * -2 → look for -2 in options
+- Return answer in the EXACT format shown in options
+- If no match after conversion, return calculated_answer with matched_option: null`
           },
           {
             role: "user",
             content: [
-              { type: "text", text: "Read the question and solve it. Ignore the multiple choice options. Return only the calculated answer." },
+              { type: "text", text: "Read the question, extract ALL multiple choice options, solve it, then match your answer to the options. Show your work including any conversions needed." },
               { type: "image_url", image_url: { url: `data:image/png;base64,${imageBase64}` } }
             ]
           }
