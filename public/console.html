@@ -93,7 +93,6 @@
             statusText.textContent=statusMap[statusEmoji]||'Unknown';
             speed.textContent=statusEmoji;
             
-            // Parse the OpenAI response
             const payload=data.payload;
             let apiResponse;
             try{
@@ -104,7 +103,6 @@
               return;
             }
             
-            // Extract the content from OpenAI response
             const content=apiResponse.choices?.[0]?.message?.content;
             if(!content){
               console.error('No content in response');
@@ -112,34 +110,28 @@
               return;
             }
             
-            // Parse the actual answer JSON
             let answerData;
             try{
               answerData=JSON.parse(content);
             }catch{
               console.error('Failed to parse content JSON');
-              answer.textContent=content; // Show raw content if not JSON
+              answer.textContent=content;
               return;
             }
             
-            // Extract and display the answer
             let display='';
-            if(answerData.result_number!==undefined){
+            if(answerData.answer!==undefined){
+              display=String(answerData.answer);
+            }else if(answerData.result_number!==undefined){
               display=String(answerData.result_number);
-              if(answerData.selection?.letter){
-                display+=` (${answerData.selection.letter})`;
-              }
-            }else if(answerData.answer){
-              display=answerData.answer;
             }
             
             answer.textContent=display||'No answer';
             answer.classList.add('pulse');
             setTimeout(()=>answer.classList.remove('pulse'),2000);
             
-            rationale.textContent=answerData.rationale||'';
+            rationale.textContent=answerData.work||'';
             
-            // Color code by status
             if(statusEmoji==='🔴'){
               answer.style.color='#e55353';
             }else if(statusEmoji==='🟢'){
@@ -165,7 +157,6 @@
     
     connect();
     
-    // Ping check
     setInterval(()=>{
       if(eventSource.readyState===2){
         console.log('Reconnecting...');
