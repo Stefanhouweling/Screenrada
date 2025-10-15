@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Screen Reader AI – (GPT-4o + PNG)</title>
   <style>
-    :root{--bg:#0b0b0c;--ink:#fff;--muted:#9aa0a6;--panel:#121316;--stroke:#2a2b2f;--brand:#2c7be5;--ok:#0fa77a}
+    :root{--bg:#0b0b0c;--ink:#fff;--muted:#9aa0a6;--panel:#121316;--stroke:#2a2b2f;--brand:#2c7be5;--ok:#0fa77a;--err:#e55353}
     *{box-sizing:border-box}
     body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,system-ui,sans-serif}
     .app{height:100dvh;display:grid;grid-template-rows:1fr 1.05fr}
@@ -21,6 +21,11 @@
     .big{font-weight:800;font-size:28px}
     .muted{opacity:.9;font-size:12px}
     .answer{border:1px solid var(--stroke);border-radius:10px;padding:10px;background:#0e0f12;min-height:80px}
+    /* progress bar */
+    .pbar{position:relative;width:220px;height:6px;border-radius:999px;background:#1a1b1f;overflow:hidden;border:1px solid #2a2b2f}
+    .pbar>i{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--brand),#6aa6ff);transition:width .1s}
+    .ptext{min-width:62px;text-align:right}
+    .err{color:var(--err)}
     @media (max-width:800px){.panes{grid-template-columns:1fr}}
   </style>
 </head>
@@ -34,12 +39,14 @@
         <label class="meta" style="margin-left:auto"><input id="autoSend" type="checkbox" checked> Auto-send</label>
       </div>
 
-      <!-- Emoji status bar -->
-      <div class="row meta" id="statusBar" style="gap:12px">
+      <!-- Emoji status + upload progress -->
+      <div class="row meta" id="statusBar" style="gap:12px;align-items:center">
         <span id="emoji">💤 Idle</span>
         <span id="hashNote"></span>
         <span id="cooldownNote"></span>
-        <span id="status" style="margin-left:auto">Status: idle</span>
+        <div class="pbar" title="Upload progress"><i id="pfill"></i></div>
+        <span id="ppct" class="ptext">0%</span>
+        <span id="net" style="margin-left:auto">Status: idle</span>
       </div>
 
       <div class="panes">
@@ -59,29 +66,36 @@
 
   <canvas id="frame" width="640" height="480" style="display:none"></canvas>
   <script>
-    const video=document.getElementById('cam'), startCam=document.getElementById('startCam'), askNow=document.getElementById('askNow');
-    const statusEl=document.getElementById('status'), frame=document.getElementById('frame'), ctx=frame.getContext('2d');
+    const video=document.getElementById('cam'),
+          startCam=document.getElementById('startCam'),
+          askNow=document.getElementById('askNow');
+    const frame=document.getElementById('frame'), ctx=frame.getContext('2d');
     const workingBig=document.getElementById('workingBig'), workingRat=document.getElementById('workingRat');
     const lockedBig=document.getElementById('lockedBig'), lockedRat=document.getElementById('lockedRat');
     const autoSend=document.getElementById('autoSend');
     const emoji=document.getElementById('emoji'), hashNote=document.getElementById('hashNote'), cooldownNote=document.getElementById('cooldownNote');
+    const pfill=document.getElementById('pfill'), ppct=document.getElementById('ppct'), net=document.getElementById('net');
+
+    // Online/offline indicator
+    function paintNet() {
+      net.textContent = navigator.onLine ? 'Status: online' : 'Status: offline';
+      net.classList.toggle('err', !navigator.onLine);
+    }
+    addEventListener('online', paintNet);
+    addEventListener('offline', paintNet);
+    paintNet();
 
     // --- Change-detection + cadence ---
-    const GRID = 8;                 // 8x8 perceptual hash grid
-    const CHANGE_THRESHOLD = 0.12;  // % different cells to count as "changed"
-    const NEW_Q_THRESHOLD   = 0.20; // % to consider a totally new question
-    const STABLE_FRAMES = 3;        // need N stable checks before sending
-    const MIN_INTERVAL_MS = 2500;   // hard cooldown between sends
-
+    const GRID=8, CHANGE_THRESHOLD=0.12, NEW_Q_THRESHOLD=0.20, STABLE_FRAMES=3, MIN_INTERVAL_MS=2500;
     // --- PNG downscale (speed) ---
-    const MAX_SEND_WIDTH = 1280;    // shrink large camera frames before PNG
+    const MAX_SEND_WIDTH=1280;
+    // --- XHR timeout (ms) ---
+    const XHR_TIMEOUT=25000;
 
     let busy=false, lastSent=0, stableCount=0;
     let lastHash='', lockedHash='', lockedAnswer=null;
 
     function setState(kind, extra='') {
-      // 1) Question Detected – Asking AI   2) New Question Detected – Asking AI
-      // 3) No New Question Detected        4) Error, plus 'idle'
       const map = {
         asking: '🤖 Question detected — asking AI…',
         newq:   '🆕 New question detected — asking AI…',
@@ -98,104 +112,107 @@
         const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}}});
         video.srcObject=stream; await video.play();
         frame.width=video.videoWidth||640; frame.height=video.videoHeight||480;
-        statusEl.textContent='Status: camera running';
         setState('idle');
         loop();
-      }catch(e){ alert('Camera permission denied or page not using HTTPS'); console.error(e); }
+      }catch(e){ alert('Camera permission denied or HTTPS issue'); console.error(e); }
     }
     startCam.onclick=startCamera;
 
-    // Perceptual hash on 8x8 grid
-    function getHash() {
+    // Perceptual hash (8x8)
+    function getHash(){
       const w=frame.width, h=frame.height;
       const cellW=Math.floor(w/GRID), cellH=Math.floor(h/GRID);
       const img=ctx.getImageData(0,0,w,h).data;
       let out='';
-      for (let gy=0; gy<GRID; gy++){
-        for (let gx=0; gx<GRID; gx++){
-          let sum=0, cnt=0;
-          const sx=gx*cellW, sy=gy*cellH;
-          for (let y=sy; y<sy+cellH && y<h; y++){
-            for (let x=sx; x<sx+cellW && x<w; x++){
-              const i=(y*w+x)*4;
-              sum += (img[i]+img[i+1]+img[i+2])/3; cnt++;
+      for(let gy=0;gy<GRID;gy++){
+        for(let gx=0;gx<GRID;gx++){
+          let sum=0,cnt=0, sx=gx*cellW, sy=gy*cellH;
+          for(let y=sy;y<sy+cellH&&y<h;y++){
+            for(let x=sx;x<sx+cellW&&x<w;x++){
+              const i=(y*w+x)*4; sum+=(img[i]+img[i+1]+img[i+2])/3; cnt++;
             }
           }
-          out += Math.floor(sum/cnt/32).toString();
+          out+=Math.floor(sum/cnt/32).toString();
         }
       }
       return out;
     }
-    function diffHash(a,b){
-      if(!a||!b||a.length!==b.length) return 1;
-      let d=0; for(let i=0;i<a.length;i++) if(a[i]!==b[i]) d++;
-      return d/a.length;
-    }
-
-    function cooldownLeft() {
-      const left = MIN_INTERVAL_MS - (Date.now()-lastSent);
-      return Math.max(0, left);
-    }
+    function diffHash(a,b){ if(!a||!b||a.length!==b.length) return 1; let d=0; for(let i=0;i<a.length;i++) if(a[i]!==b[i]) d++; return d/a.length; }
+    function cooldownLeft(){ return Math.max(0, MIN_INTERVAL_MS-(Date.now()-lastSent)); }
 
     function loop(){
       ctx.drawImage(video,0,0,frame.width,frame.height);
-      const h = getHash();
-      const d = diffHash(h, lastHash);
+      const h=getHash(), d=diffHash(h,lastHash);
       hashNote.textContent = `Δ ${Math.round(d*100)}%`;
 
-      if (autoSend.checked && !busy){
-        if (cooldownLeft() > 0){
-          cooldownNote.textContent = `⏱ ${Math.ceil(cooldownLeft()/1000)}s`;
+      if(autoSend.checked && !busy){
+        if(cooldownLeft()>0){
+          cooldownNote.textContent=`⏱ ${Math.ceil(cooldownLeft()/1000)}s`;
         } else {
-          cooldownNote.textContent = '';
-          if (d < CHANGE_THRESHOLD){
-            // stable
+          cooldownNote.textContent='';
+          if(d<CHANGE_THRESHOLD){
             stableCount++;
-            if (stableCount >= STABLE_FRAMES){
-              const newQ = lockedHash && diffHash(h, lockedHash) > NEW_Q_THRESHOLD;
-              setState(newQ ? 'newq' : 'asking');
+            if(stableCount>=STABLE_FRAMES){
+              const newQ = lockedHash && diffHash(h,lockedHash)>NEW_Q_THRESHOLD;
+              setState(newQ?'newq':'asking');
               sendFrame(h);
-              stableCount = 0;
+              stableCount=0;
             }
-          } else {
-            // changed too much; reset stability
-            stableCount = 0;
-            if (lockedAnswer && lockedHash) setState('nonew', `(${Math.round(d*100)}%)`);
+          }else{
+            stableCount=0;
+            if(lockedAnswer && lockedHash) setState('nonew', `(${Math.round(d*100)}%)`);
           }
         }
       }
-      lastHash = h;
+      lastHash=h;
       requestAnimationFrame(loop);
     }
 
-    askNow.onclick = ()=>{ const h=getHash(); setState('asking'); sendFrame(h); };
+    askNow.onclick=()=>{ const h=getHash(); setState('asking'); sendFrame(h); };
 
-    // Downscale to speed up PNGs massively
+    // Downscale for faster PNGs
     function toBase64PNG(){
-      const sw = frame.width;
-      const scale = Math.min(1, MAX_SEND_WIDTH / sw);
-      if (scale === 1){
-        return frame.toDataURL('image/png').split(',')[1];
-      }
-      const tw = Math.round(frame.width*scale), th = Math.round(frame.height*scale);
-      const off = document.createElement('canvas');
-      off.width = tw; off.height = th;
-      off.getContext('2d').drawImage(frame, 0, 0, tw, th);
+      const sw=frame.width, scale=Math.min(1, MAX_SEND_WIDTH/sw);
+      if(scale===1) return frame.toDataURL('image/png').split(',')[1];
+      const tw=Math.round(frame.width*scale), th=Math.round(frame.height*scale);
+      const off=document.createElement('canvas'); off.width=tw; off.height=th;
+      off.getContext('2d').drawImage(frame,0,0,tw,th);
       return off.toDataURL('image/png').split(',')[1];
     }
+
+    // XHR with upload progress
+    function postWithProgress(url, bodyObj, onProgress){
+      return new Promise((resolve,reject)=>{
+        const xhr=new XMLHttpRequest();
+        xhr.open('POST', url, true);
+        xhr.timeout = XHR_TIMEOUT;
+        xhr.setRequestHeader('Content-Type','application/json');
+        xhr.upload.onprogress = (e)=>{
+          if(e.lengthComputable && typeof onProgress==='function'){
+            const pct = Math.max(1, Math.round((e.loaded/e.total)*100));
+            onProgress(pct);
+          }
+        };
+        xhr.onload=()=> resolve({status:xhr.status, text:xhr.responseText});
+        xhr.onerror=()=> reject(new Error('Network error (upload failed)'));
+        xhr.ontimeout=()=> reject(new Error('Request timed out'));
+        xhr.send(JSON.stringify(bodyObj));
+      });
+    }
+
+    function setProgress(p){ pfill.style.width = Math.min(100,Math.max(0,p))+'%'; ppct.textContent = Math.min(100,Math.max(0,p))+'%'; }
 
     async function sendFrame(currentHash){
       try{
         busy=true; lastSent=Date.now();
+        setProgress(0); // reset bar
         const base64 = toBase64PNG();
-        const r = await fetch('/ask', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ imageBase64: base64 })
-        });
-        const text = await r.text();
-        let data; try { data = JSON.parse(text); } catch { data = { error: text }; }
-        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+
+        const res = await postWithProgress('/ask', { imageBase64: base64 }, (p)=>setProgress(p));
+        // If server took long before starting to read, progress might jump late—still useful feedback.
+
+        let data; try{ data = JSON.parse(res.text); }catch{ data={ error: res.text }; }
+        if (res.status<200 || res.status>=300) throw new Error(data.error || `HTTP ${res.status}`);
 
         const content = data.choices?.[0]?.message?.content || '{}';
         let obj={}; try{ obj=JSON.parse(content); }catch{ obj={answer:content}; }
@@ -208,10 +225,12 @@
         lockedAnswer = obj.answer || null;
         lockedHash = currentHash;
         setState('nonew');
+        setProgress(100);
       } catch(e){
         workingBig.textContent='Error';
         workingRat.textContent=e.message||String(e);
         setState('error', e.message||'');
+        // keep last progress visible; you can also reset to 0 if you prefer
       } finally {
         busy=false;
       }
