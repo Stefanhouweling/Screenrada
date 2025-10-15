@@ -69,12 +69,12 @@
     }
 
     async function testSpeed(){
-      const blob=new Blob([new Uint8Array(200000)]); // ~200KB
+      const blob=new Blob([new Uint8Array(200000)]);
       const t0=performance.now();
       try{
         await fetch("https://www.google.com",{method:"POST",body:blob,mode:"no-cors"});
         const ms=performance.now()-t0;
-        let rate=200/(ms/1000); // KB/s rough
+        let rate=200/(ms/1000);
         if(rate>150) speedState='🟢 Fast';
         else if(rate>60) speedState='🟠 Medium';
         else speedState='🔴 Slow';
@@ -112,11 +112,21 @@
       }catch(e){err(e.message);}
     }
 
-    function handle(st,txt){busy=false;if(st<200||st>=300)return err('HTTP '+st);
-      let d;try{d=JSON.parse(txt);}catch{d={error:txt}};
-      const c=d.choices?.[0]?.message?.content||'{}';let o={};try{o=JSON.parse(c);}catch{o={answer:c}};
-      ans.textContent=o.result_number||o.answer||'No answer';rat.textContent=o.rationale||'';setEmoji('🔒 Done');setProgress(100);
+    function handle(st,txt){
+      busy=false;
+      if(st<200||st>=300) return err('HTTP '+st);
+      let d;try{d=JSON.parse(txt);}catch{d={}};
+      let content=d.choices?.[0]?.message?.content;
+      if(!content) return err('Empty response');
+      let o;
+      try{o=typeof content==="string"?JSON.parse(content):content;}
+      catch{o={answer:content}};
+      ans.textContent=o.result_number||o.answer||"No answer";
+      rat.textContent=o.rationale||"";
+      setEmoji('🔒 Done');
+      setProgress(100);
     }
+
     function err(m){busy=false;ans.textContent='Error';rat.textContent=m;setEmoji('❌ Error');}
   </script>
 </body>
