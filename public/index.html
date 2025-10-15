@@ -3,36 +3,44 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Screen Reader AI (Stable + Fast)</title>
+  <title>Screen Reader AI – Stable Release</title>
   <style>
-    :root{--bg:#0b0b0c;--ink:#fff;--muted:#9aa0a6;--panel:#121316;--stroke:#2a2b2f;--brand:#2c7be5;--ok:#0fa77a;--warn:#e6b800;--bad:#e63946}
-    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,system-ui,sans-serif}
-    .app{height:100dvh;display:grid;grid-template-rows:1fr 1.1fr}
+    :root{--bg:#0b0b0c;--ink:#fff;--muted:#9aa0a6;--panel:#121316;--stroke:#2a2b2f;--brand:#2c7be5;--ok:#0fa77a}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,system-ui,sans-serif}
+    .app{height:100dvh;display:grid;grid-template-rows:1fr 1fr}
     video{width:100%;height:100%;object-fit:cover;background:#000}
     .bottom{padding:10px;display:flex;flex-direction:column;gap:8px}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    input,button{border:none;border-radius:10px;padding:10px 12px}
+    button{background:var(--brand);color:#fff}
+    #askNow{background:var(--ok)}
     .meta{font-size:12px;opacity:.9}
     .panes{display:grid;grid-template-columns:1fr 1fr;gap:10px}
     .pane{background:var(--panel);border:1px solid var(--stroke);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px}
-    .big{font-weight:800;font-size:28px}.muted{opacity:.9;font-size:12px}
+    .big{font-weight:800;font-size:28px}
+    .muted{opacity:.9;font-size:12px}
     .answer{border:1px solid var(--stroke);border-radius:10px;padding:10px;background:#0e0f12;min-height:80px}
-    #progressBar{height:4px;background:var(--brand);width:0%;transition:width .3s}
-    .emojiStatus{font-size:14px}
-    @media(max-width:800px){.panes{grid-template-columns:1fr}}
+    @media (max-width:800px){.panes{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
   <div class="app">
     <section class="top"><video id="cam" autoplay playsinline muted></video></section>
     <section class="bottom">
-      <div class="meta">
-        <span id="status">🟢 Starting camera...</span> 
-        <span id="netSpeed">⚪ Checking speed...</span>
+      <div class="row">
+        <button id="startCam">Start Camera</button>
+        <button id="askNow">Ask Now</button>
+        <label class="meta" style="margin-left:auto"><input id="autoSend" type="checkbox" checked> Auto-send</label>
       </div>
-      <div id="progressBar"></div>
+      <div class="row meta">
+        <span id="status">Status: idle</span>
+        <span id="note"> • Server handles /ask on this same domain</span>
+      </div>
       <div class="panes">
         <div class="pane">
           <div class="muted">Working</div>
-          <div id="workingBig" class="answer big">Waiting...</div>
+          <div id="workingBig" class="answer big">No response</div>
           <div id="workingRat" class="answer muted" style="min-height:40px"></div>
         </div>
         <div class="pane">
@@ -43,81 +51,53 @@
       </div>
     </section>
   </div>
+
   <canvas id="frame" width="640" height="480" style="display:none"></canvas>
   <script>
-    const video=document.getElementById('cam'),statusEl=document.getElementById('status');
+    const video=document.getElementById('cam'),startCam=document.getElementById('startCam'),askNow=document.getElementById('askNow');
+    const statusEl=document.getElementById('status'),frame=document.getElementById('frame'),ctx=frame.getContext('2d');
     const workingBig=document.getElementById('workingBig'),workingRat=document.getElementById('workingRat');
     const lockedBig=document.getElementById('lockedBig'),lockedRat=document.getElementById('lockedRat');
-    const frame=document.getElementById('frame'),ctx=frame.getContext('2d');
-    const progressBar=document.getElementById('progressBar'),netSpeed=document.getElementById('netSpeed');
-    let busy=false,lastHash='',stableCount=0,widthTarget=1280;
-
-    // Internet speed indicator
-    async function checkSpeed(){
-      const start=performance.now();
-      try{
-        await fetch("https://speed.cloudflare.com/__down?bytes=50000");
-        const dur=(performance.now()-start)/1000, mbps=(0.05/dur)*8;
-        if(mbps>10) netSpeed.textContent='🟢 Fast';
-        else if(mbps>3) netSpeed.textContent='🟠 Medium';
-        else netSpeed.textContent='🔴 Slow';
-        return mbps;
-      }catch{ netSpeed.textContent='⚫ Offline'; return 0;}
-    }
+    const autoSend=document.getElementById('autoSend');
 
     async function startCamera(){
       try{
         const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}}});
         video.srcObject=stream; await video.play();
         frame.width=video.videoWidth||640; frame.height=video.videoHeight||480;
-        statusEl.textContent='📷 Camera running';
+        statusEl.textContent='Status: camera running';
         loop();
-      }catch(e){ alert('Camera access failed'); }
+      }catch(e){ alert('Camera permission denied or page not using HTTPS'); console.error(e); }
     }
-    startCamera();
+    startCam.onclick=startCamera;
+
+    let busy=false,lastSent=0;
+    function loop(){
+      ctx.drawImage(video,0,0,frame.width,frame.height);
+      if(autoSend.checked && !busy && Date.now()-lastSent>2000){ captureAndSend(); }
+      requestAnimationFrame(loop);
+    }
+    askNow.onclick=captureAndSend;
 
     async function captureAndSend(){
-      if(busy) return; busy=true;
-      ctx.drawImage(video,0,0,frame.width,frame.height);
-      let imgData=ctx.getImageData(0,0,frame.width,frame.height);
-      // optional grayscale for smaller size
-      for(let i=0;i<imgData.data.length;i+=4){
-        let avg=(imgData.data[i]+imgData.data[i+1]+imgData.data[i+2])/3;
-        imgData.data[i]=imgData.data[i+1]=imgData.data[i+2]=avg;
-      }
-      ctx.putImageData(imgData,0,0);
-      const base64=frame.toDataURL('image/png',0.8).split(',')[1];
-      const hash=btoa(base64.slice(0,256)); // quick hash
-      if(hash===lastHash){ busy=false; statusEl.textContent='⏸ No new question detected'; return;}
-      lastHash=hash; stableCount++;
-      if(stableCount<2){busy=false;return;}
-      stableCount=0;
-      statusEl.textContent='🤖 Asking AI...';
-      progressBar.style.width='10%';
+      if(busy) return; busy=true; lastSent=Date.now();
+      const base64=frame.toDataURL('image/png').split(',')[1];
+      statusEl.textContent='Sending image to AI...';
       try{
         const r=await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({imageBase64:base64})});
-        progressBar.style.width='60%';
-        const txt=await r.text();
-        progressBar.style.width='90%';
-        let obj={}; try{obj=JSON.parse(txt);}catch{obj={answer:txt};}
+        const data=await r.json();
+        const txt=data.choices?.[0]?.message?.content||'{}';
+        let obj={}; try{ obj=JSON.parse(txt); }catch(_){ obj={answer:txt}; }
         workingBig.textContent=obj.answer||'No answer';
         workingRat.textContent=obj.rationale||'';
         lockedBig.textContent=obj.answer||'No answer';
         lockedRat.textContent=obj.rationale||'';
-        statusEl.textContent='✅ Answer received';
+        statusEl.textContent='Answer received';
       }catch(e){
-        workingBig.textContent='Error';workingRat.textContent=e.message;
-        statusEl.textContent='❌ Upload failed';
-      }finally{progressBar.style.width='100%';setTimeout(()=>progressBar.style.width='0%',800);busy=false;}
+        workingBig.textContent='Error'; workingRat.textContent=e.message||String(e);
+        statusEl.textContent='Upload failed';
+      }finally{ busy=false; }
     }
-
-    async function loop(){
-      ctx.drawImage(video,0,0,frame.width,frame.height);
-      if(!busy) captureAndSend();
-      requestAnimationFrame(loop);
-    }
-
-    checkSpeed();
   </script>
 </body>
 </html>
