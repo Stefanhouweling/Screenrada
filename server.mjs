@@ -37,21 +37,23 @@ app.post("/ask", async (req, res) => {
 
 Instructions:
 1) Extract ONLY the question text (ignore answer choices)
-2) Solve the problem mathematically
-3) Return ONLY the final numeric answer
+2) Identify what the question is asking for (read carefully - "how much MORE" means find the DIFFERENCE)
+3) Solve the problem step-by-step
+4) Return ONLY the final answer to the specific question asked
 
 Return STRICT JSON:
 {
  "question": "extracted question text",
  "answer": "final numeric answer only",
- "work": "brief calculation shown"
+ "work": "step-by-step calculation"
 }
 
 CRITICAL: 
-- Ignore all multiple choice options
-- Focus only on solving the actual problem
-- Return ONLY the number as the answer
-- Show your work briefly`
+- Ignore all multiple choice options completely
+- Pay attention to keywords: "more", "less", "difference", "increase", "decrease"
+- If asking "how much more", subtract to find the difference
+- Return ONLY the final number that answers the specific question
+- Show ALL steps in your work`
           },
           {
             role: "user",
