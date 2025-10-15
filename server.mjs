@@ -27,36 +27,36 @@ app.post("/ask", async (req, res) => {
         Authorization: `Bearer ${OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o",
+        model: "gpt-4o-mini",
         temperature: 0,
-        max_tokens: 180,
+        max_tokens: 150,
         messages: [
           {
             role: "system",
-            content: `You are an OCR + reasoning AI for MCQs. Use spatial layout and numerical reasoning. Do not guess.
+            content: `You are a math problem solver. Read the question carefully and solve it step-by-step.
 
-Workflow:
-1) Extract the question text.
-2) Extract options as [{"letter","text"}].
-3) Compute the correct numeric/logical result ("result_number").
-4) Pick the option that EXACTLY equals result_number.
-5) If none match, set consistency="no_match" and selection=null.
+Instructions:
+1) Extract ONLY the question text (ignore answer choices)
+2) Solve the problem mathematically
+3) Return ONLY the final numeric answer
 
-Return STRICT JSON only:
+Return STRICT JSON:
 {
- "question": "...",
- "options": [{"letter":"A","text":"..."}, ...],
- "result_number": number|string,
- "selection": {"letter":"A","text":"..."} | null,
- "consistency": "match" | "no_match",
- "rationale": "≤2 lines",
- "confidence": number
-}`
+ "question": "extracted question text",
+ "answer": "final numeric answer only",
+ "work": "brief calculation shown"
+}
+
+CRITICAL: 
+- Ignore all multiple choice options
+- Focus only on solving the actual problem
+- Return ONLY the number as the answer
+- Show your work briefly`
           },
           {
             role: "user",
             content: [
-              { type: "text", text: "Solve and return strict JSON only." },
+              { type: "text", text: "Read the question and solve it. Ignore the multiple choice options. Return only the calculated answer." },
               { type: "image_url", image_url: { url: `data:image/png;base64,${imageBase64}` } }
             ]
           }
