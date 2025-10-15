@@ -1,15 +1,10 @@
 {
   "name": "screenreaderai-render",
-  "private": true,
-  "type": "module",
   "version": "1.0.0",
-  "engines": {
-    "node": ">=18"
-  },
-  "scripts": {
-    "start": "node server.mjs"
-  },
+  "type": "module",
+  "scripts": { "start": "node server.mjs" },
   "dependencies": {
-    "express": "^4.19.2"
+    "express": "^4.18.2",
+    "node-fetch": "^3.3.2"
   }
 }
