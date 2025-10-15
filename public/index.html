@@ -234,16 +234,37 @@
       busy=false;
       if(status<200||status>=300)return err('HTTP '+status);
       
-      let d;try{d=JSON.parse(text)}catch{d={error:text}};
-      const c=d.choices?.[0]?.message?.content||'{}';
-      let o={};try{o=JSON.parse(c)}catch{o={answer:c}};
+      let d;
+      try{
+        d=JSON.parse(text);
+      }catch{
+        err('Failed to parse response');
+        return;
+      }
+      
+      const c=d.choices?.[0]?.message?.content;
+      if(!c){
+        err('No content in response');
+        return;
+      }
+      
+      let o;
+      try{
+        o=JSON.parse(c);
+      }catch{
+        err('Invalid JSON in content');
+        return;
+      }
+      
       let display='',extra='';
       
       if(o.result_number!==undefined){
         display=String(o.result_number);
         if(o.consistency==='match'&&o.selection?.letter)extra=` (option ${o.selection.letter})`;
         else if(o.consistency==='no_match')extra=' ⚠ no match';
-      }else if(o.answer)display=o.answer;
+      }else if(o.answer){
+        display=o.answer;
+      }
       
       workingBig.textContent=display||'No answer';
       workingRat.textContent=(o.rationale||'')+extra;
