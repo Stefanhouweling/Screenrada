@@ -51,7 +51,7 @@
     const pfill=document.getElementById('pfill'),ppct=document.getElementById('ppct'),net=document.getElementById('net'),speed=document.getElementById('speed');
     const timer=document.getElementById('timer');
     
-    const GRID=6,CHANGE_THRESHOLD=.14,NEW_Q_THRESHOLD=.2,STABLE_FRAMES=2,MIN_INTERVAL_MS=1500;
+    const GRID=6,CHANGE_THRESHOLD=.18,NEW_Q_THRESHOLD=.25,STABLE_FRAMES=3,MIN_INTERVAL_MS=3000;
     let MAX_SEND_WIDTH=768;
     let busy=false,lastSent=0,stableCount=0,lastHash='',lockedHash='',lockedAnswer=null;
     let uploadSpeeds=[],currentSpeed='unknown',restartTimeout=null,requestStartTime=0;
@@ -135,16 +135,80 @@
       const o=document.createElement('canvas');
       o.width=tw;o.height=th;
       const octx=o.getContext('2d');
+      
+      // Step 1: Draw with image smoothing for better quality
+      octx.imageSmoothingEnabled=true;
+      octx.imageSmoothingQuality='high';
       octx.drawImage(f,0,0,tw,th);
       
+      // Step 2: Get image data for processing
       const imgData=octx.getImageData(0,0,tw,th);
       const d=imgData.data;
+      
+      // Step 3: Convert to grayscale with contrast enhancement
       for(let i=0;i<d.length;i+=4){
-        const gray=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+        // Weighted grayscale conversion
+        let gray=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+        
+        // Increase contrast (makes text sharper)
+        gray=((gray-128)*1.3)+128;
+        
+        // Clamp values
+        gray=Math.max(0,Math.min(255,gray));
+        
+        // Apply slight sharpening for text clarity
         d[i]=d[i+1]=d[i+2]=gray;
       }
-      octx.putImageData(imgData,0,0);
-      return o.toDataURL('image/jpeg',0.85).split(',')[1];
+      
+      // Step 4: Apply sharpening filter for text
+      const sharpened=sharpenImage(imgData,tw,th);
+      octx.putImageData(sharpened,0,0);
+      
+      return o.toDataURL('image/png',1.0).split(',')[1];
+    }
+    
+    function sharpenImage(imgData,w,h){
+      const d=imgData.data;
+      const out=new ImageData(w,h);
+      const od=out.data;
+      
+      // Sharpening kernel (emphasizes edges/text)
+      const kernel=[0,-1,0,-1,5,-1,0,-1,0];
+      
+      for(let y=1;y<h-1;y++){
+        for(let x=1;x<w-1;x++){
+          let sum=0;
+          for(let ky=-1;ky<=1;ky++){
+            for(let kx=-1;kx<=1;kx++){
+              const idx=((y+ky)*w+(x+kx))*4;
+              const kIdx=(ky+1)*3+(kx+1);
+              sum+=d[idx]*kernel[kIdx];
+            }
+          }
+          const i=(y*w+x)*4;
+          sum=Math.max(0,Math.min(255,sum));
+          od[i]=od[i+1]=od[i+2]=sum;
+          od[i+3]=255;
+        }
+      }
+      
+      // Copy edges without sharpening
+      for(let x=0;x<w;x++){
+        for(let edge of[0,h-1]){
+          const i=(edge*w+x)*4;
+          od[i]=od[i+1]=od[i+2]=d[i];
+          od[i+3]=255;
+        }
+      }
+      for(let y=0;y<h;y++){
+        for(let edge of[0,w-1]){
+          const i=(y*w+edge)*4;
+          od[i]=od[i+1]=od[i+2]=d[i];
+          od[i+3]=255;
+        }
+      }
+      
+      return out;
     }
 
     function setProgress(p){pfill.style.width=p+'%';ppct.textContent=p+'%'}
@@ -163,19 +227,34 @@
       hashNote.textContent=`Δ ${Math.round(d*100)}%`;
       
       if(!busy){
-        if(cooldownLeft()>0)cooldownNote.textContent=`⏱ ${Math.ceil(cooldownLeft()/1000)}s`;
-        else{
+        const cd=cooldownLeft();
+        if(cd>0){
+          cooldownNote.textContent=`⏱ ${Math.ceil(cd/1000)}s`;
+        }else{
           cooldownNote.textContent='';
+          
+          // Check if this is a NEW question (significant change from locked)
+          if(lockedHash){
+            const changeFromLocked=diffHash(h,lockedHash);
+            if(changeFromLocked<NEW_Q_THRESHOLD){
+              // Still the same question - DO NOT re-analyze
+              setState('nonew',`(locked)`);
+              lastHash=h;
+              requestAnimationFrame(loop);
+              return;
+            }
+          }
+          
+          // New question detected or no locked answer yet
           if(d<CHANGE_THRESHOLD){
             if(++stableCount>=STABLE_FRAMES){
-              const n=lockedHash&&diffHash(h,lockedHash)>NEW_Q_THRESHOLD;
-              setState(n?'newq':'asking');
+              const isNewQ=lockedHash&&diffHash(h,lockedHash)>NEW_Q_THRESHOLD;
+              setState(isNewQ?'newq':'asking');
               send(h);
               stableCount=0;
             }
           }else{
             stableCount=0;
-            if(lockedAnswer)setState('nonew',`(${Math.round(d*100)}%)`);
           }
         }
       }
