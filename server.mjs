@@ -1,18 +1,22 @@
 import express from "express";
-import fetch from "node-fetch";
-import bodyParser from "body-parser";
-import dotenv from "dotenv";
-dotenv.config();
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(bodyParser.json({ limit: "20mb" }));
+app.use(express.json({ limit: "20mb" }));
+
 const PORT = process.env.PORT || 10000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// === /ask endpoint ===
+// --- proxy endpoint ---
 app.post("/ask", async (req, res) => {
   try {
-    const { imageBase64 } = req.body;
+    const { imageBase64 } = req.body || {};
+    if (!imageBase64) return res.status(400).json({ error: "Missing imageBase64" });
+
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -26,26 +30,23 @@ app.post("/ask", async (req, res) => {
         messages: [
           {
             role: "system",
-            content: `You are an OCR + reasoning AI that interprets test screenshots. 
-Use spatial layout and numerical reasoning ONLY. 
-Never guess.
+            content: `You are an OCR + reasoning AI for MCQs. Use spatial layout and numerical reasoning. Do not guess.
 
 Workflow:
-1. Extract the question text.
-2. Extract visible multiple-choice options [{letter,text}].
-3. Compute the correct numeric/logical answer ("result_number").
-4. Find the option whose numeric value/text EXACTLY equals result_number.
-5. If no match, set consistency="no_match" and selection=null.
-Return JSON only, no commentary.
+1) Extract the question text.
+2) Extract options as [{"letter","text"}].
+3) Compute the correct numeric/logical result ("result_number").
+4) Pick the option that EXACTLY equals result_number.
+5) If none match, set consistency="no_match" and selection=null.
 
-Format:
+Return STRICT JSON only:
 {
  "question": "...",
  "options": [{"letter":"A","text":"..."}, ...],
  "result_number": number|string,
- "selection": {"letter":"A","text":"..."}|null,
- "consistency": "match"|"no_match",
- "rationale": "≤2 concise lines of reasoning",
+ "selection": {"letter":"A","text":"..."} | null,
+ "consistency": "match" | "no_match",
+ "rationale": "≤2 lines",
  "confidence": number
 }`
           },
@@ -61,12 +62,16 @@ Format:
       })
     });
 
-    const data = await r.json();
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message || "Server error" });
+    const text = await r.text();           // pass through raw body (good for errors too)
+    res.status(r.status).type("application/json").send(text);
+  } catch (e) {
+    res.status(500).json({ error: e.message || "Server error" });
   }
 });
 
-app.use(express.static("public"));
-app.listen(PORT, () => console.log(`✅ Server live on port ${PORT}`));
+// static UI
+app.use(express.static(path.join(__dirname, "public")));
+
+app.listen(PORT, () => {
+  console.log(`✅ Server live on port ${PORT}`);
+});
