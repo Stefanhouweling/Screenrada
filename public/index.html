@@ -20,6 +20,7 @@
     .pbar>i{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--brand),#6aa6ff);transition:width .15s}
     .err{color:var(--err)}.warn{color:var(--warn)}.ok{color:var(--ok)}
     .speed-indicator{font-size:18px;margin-left:auto}
+    .timer{font-weight:700;color:var(--brand)}
     @media(max-width:800px){.panes{grid-template-columns:1fr}}
   </style>
 </head>
@@ -30,6 +31,7 @@
       <div class="row meta" style="gap:12px">
         <span id="emoji">💤 Idle</span><span id="hashNote"></span><span id="cooldownNote"></span>
         <div class="pbar"><i id="pfill"></i></div><span id="ppct">0%</span>
+        <span id="timer" class="timer"></span>
         <span id="speed" class="speed-indicator">🚦</span>
         <span id="net" style="margin-left:4px">Status: idle</span>
       </div>
@@ -42,16 +44,17 @@
 
   <canvas id="frame" width="640" height="480" style="display:none"></canvas>
   <script>
-    const v=document.getElementById('cam'),f=document.getElementById('frame'),ctx=f.getContext('2d');
+    const v=document.getElementById('cam'),f=document.getElementById('frame'),ctx=f.getContext('2d',{willReadFrequently:true});
     const workingBig=document.getElementById('workingBig'),workingRat=document.getElementById('workingRat');
     const lockedBig=document.getElementById('lockedBig'),lockedRat=document.getElementById('lockedRat');
     const emoji=document.getElementById('emoji'),hashNote=document.getElementById('hashNote'),cooldownNote=document.getElementById('cooldownNote');
     const pfill=document.getElementById('pfill'),ppct=document.getElementById('ppct'),net=document.getElementById('net'),speed=document.getElementById('speed');
+    const timer=document.getElementById('timer');
     
-    const GRID=8,CHANGE_THRESHOLD=.14,NEW_Q_THRESHOLD=.2,STABLE_FRAMES=2,MIN_INTERVAL_MS=2500;
-    let MAX_SEND_WIDTH=1280; // Dynamic based on connection
+    const GRID=6,CHANGE_THRESHOLD=.14,NEW_Q_THRESHOLD=.2,STABLE_FRAMES=2,MIN_INTERVAL_MS=1500;
+    let MAX_SEND_WIDTH=768; // Start smaller for speed
     let busy=false,lastSent=0,stableCount=0,lastHash='',lockedHash='',lockedAnswer=null;
-    let uploadSpeeds=[],currentSpeed='unknown',restartTimeout=null;
+    let uploadSpeeds=[],currentSpeed='unknown',restartTimeout=null,requestStartTime=0;
 
     function paintNet(){
       const online=navigator.onLine;
@@ -64,9 +67,9 @@
     function updateSpeedIndicator(){
       if(!navigator.onLine){speed.textContent='🔴';return}
       const avg=uploadSpeeds.length?uploadSpeeds.reduce((a,b)=>a+b)/uploadSpeeds.length:0;
-      if(avg>500){speed.textContent='🟢';currentSpeed='fast';MAX_SEND_WIDTH=1280}
-      else if(avg>200){speed.textContent='🟡';currentSpeed='medium';MAX_SEND_WIDTH=1024}
-      else{speed.textContent='🔴';currentSpeed='slow';MAX_SEND_WIDTH=864}
+      if(avg>400){speed.textContent='🟢';currentSpeed='fast';MAX_SEND_WIDTH=896}
+      else if(avg>200){speed.textContent='🟡';currentSpeed='medium';MAX_SEND_WIDTH=768}
+      else{speed.textContent='🔴';currentSpeed='slow';MAX_SEND_WIDTH=640}
     }
 
     function setState(k,extra=''){
@@ -86,12 +89,12 @@
     async function startCam(){
       try{
         const s=await navigator.mediaDevices.getUserMedia({
-          video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}}
+          video:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}
         });
         v.srcObject=s;
         await v.play();
-        f.width=v.videoWidth||640;
-        f.height=v.videoHeight||480;
+        f.width=Math.min(v.videoWidth||640,1280);
+        f.height=Math.min(v.videoHeight||480,720);
         setState('idle');
         loop();
       }catch(e){
@@ -134,7 +137,6 @@
       const octx=o.getContext('2d');
       octx.drawImage(f,0,0,tw,th);
       
-      // Convert to grayscale
       const imgData=octx.getImageData(0,0,tw,th);
       const d=imgData.data;
       for(let i=0;i<d.length;i+=4){
@@ -142,10 +144,18 @@
         d[i]=d[i+1]=d[i+2]=gray;
       }
       octx.putImageData(imgData,0,0);
-      return o.toDataURL('image/png').split(',')[1];
+      return o.toDataURL('image/jpeg',0.85).split(',')[1];
     }
 
     function setProgress(p){pfill.style.width=p+'%';ppct.textContent=p+'%'}
+
+    function updateTimer(){
+      if(requestStartTime){
+        const elapsed=((Date.now()-requestStartTime)/1000).toFixed(1);
+        timer.textContent=elapsed+'s';
+        if(busy)requestAnimationFrame(updateTimer);
+      }
+    }
 
     function loop(){
       ctx.drawImage(v,0,0,f.width,f.height);
@@ -174,57 +184,42 @@
     }
 
     async function send(cur,retryCount=0){
-      busy=true;lastSent=Date.now();setProgress(0);
-      const startTime=Date.now();
+      busy=true;lastSent=Date.now();requestStartTime=Date.now();setProgress(0);
+      updateTimer();
       const base=toBase64Grayscale();
       const sizeKB=(base.length*0.75)/1024;
 
       try{
-        const xhr=new XMLHttpRequest();
-        xhr.open('POST','/ask');
-        xhr.setRequestHeader('Content-Type','application/json');
+        const response=await fetch('/ask',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({imageBase64:base})
+        });
+
+        const elapsed=(Date.now()-requestStartTime)/1000;
+        const kbps=sizeKB/elapsed;
+        uploadSpeeds.push(kbps);
+        if(uploadSpeeds.length>5)uploadSpeeds.shift();
+        updateSpeedIndicator();
         
-        xhr.upload.onprogress=e=>{
-          if(e.lengthComputable)setProgress(Math.round(e.loaded/e.total*100));
-        };
-        
-        xhr.onload=()=>{
-          const duration=(Date.now()-startTime)/1000;
-          const kbps=sizeKB/duration;
-          uploadSpeeds.push(kbps);
-          if(uploadSpeeds.length>5)uploadSpeeds.shift();
-          updateSpeedIndicator();
-          handle(xhr.status,xhr.responseText,cur);
-        };
-        
-        xhr.onerror=()=>{
-          if(retryCount<1){
-            console.warn("Retrying with lower resolution...");
-            MAX_SEND_WIDTH=Math.max(640,MAX_SEND_WIDTH-216);
-            setTimeout(()=>send(cur,retryCount+1),1500);
-          }else{
-            err('Upload failed after retry');
-          }
-        };
-        
-        xhr.ontimeout=()=>{
-          if(retryCount<1){
-            console.warn("Timeout, retrying...");
-            setTimeout(()=>send(cur,retryCount+1),1000);
-          }else{
-            err('Request timed out');
-          }
-        };
-        
-        xhr.timeout=15000;
-        xhr.send(JSON.stringify({imageBase64:base}));
+        setProgress(100);
+        const text=await response.text();
+        handle(response.status,text,cur);
       }catch(e){
-        err(e.message);
+        if(retryCount<1){
+          console.warn("Retrying with lower resolution...");
+          MAX_SEND_WIDTH=Math.max(512,MAX_SEND_WIDTH-128);
+          setTimeout(()=>send(cur,retryCount+1),800);
+        }else{
+          err('Upload failed: '+e.message);
+        }
       }
     }
 
     function err(msg){
       busy=false;
+      requestStartTime=0;
+      timer.textContent='';
       workingBig.textContent='Error';
       workingRat.textContent=msg;
       setState('error',msg);
@@ -232,6 +227,11 @@
 
     function handle(status,text,cur){
       busy=false;
+      const totalTime=((Date.now()-requestStartTime)/1000).toFixed(2);
+      requestStartTime=0;
+      timer.textContent=totalTime+'s ✓';
+      setTimeout(()=>timer.textContent='',3000);
+      
       if(status<200||status>=300)return err('HTTP '+status);
       
       let d;
@@ -276,7 +276,6 @@
       setState('nonew');
     }
 
-    // Auto-restart on freeze
     setInterval(()=>{
       if(v.paused||v.ended){
         console.log('Camera frozen, restarting...');
@@ -286,3 +285,4 @@
   </script>
 </body>
 </html>
+```
