@@ -11,7 +11,10 @@ app.use(express.json({ limit: "20mb" }));
 const PORT = process.env.PORT || 10000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// --- proxy endpoint ---
+// SSE clients for console
+let consoleClients = [];
+
+// --- proxy endpoint with retry logic ---
 app.post("/ask", async (req, res) => {
   try {
     const { imageBase64 } = req.body || {};
@@ -26,7 +29,7 @@ app.post("/ask", async (req, res) => {
       body: JSON.stringify({
         model: "gpt-4o",
         temperature: 0,
-        max_tokens: 300,
+        max_tokens: 180, // Reduced from 300
         messages: [
           {
             role: "system",
@@ -62,11 +65,36 @@ Return STRICT JSON only:
       })
     });
 
-    const text = await r.text();           // pass through raw body (good for errors too)
+    const text = await r.text();
+    
+    // Broadcast to console clients
+    const statusEmoji = r.ok ? "🟢" : "🔴";
+    consoleClients.forEach(client => {
+      client.write(`data: ${JSON.stringify({ type: 'answer', internet: statusEmoji, payload: text })}\n\n`);
+    });
+    
     res.status(r.status).type("application/json").send(text);
   } catch (e) {
+    consoleClients.forEach(client => {
+      client.write(`data: ${JSON.stringify({ type: 'answer', internet: "🔴", payload: JSON.stringify({error: e.message}) })}\n\n`);
+    });
     res.status(500).json({ error: e.message || "Server error" });
   }
+});
+
+// SSE endpoint for console
+app.get("/events", (req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive"
+  });
+  
+  consoleClients.push(res);
+  
+  req.on("close", () => {
+    consoleClients = consoleClients.filter(c => c !== res);
+  });
 });
 
 // static UI
