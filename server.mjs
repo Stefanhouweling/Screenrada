@@ -27,9 +27,9 @@ app.post("/ask", async (req, res) => {
         Authorization: `Bearer ${OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: "gpt-4o",
         temperature: 0,
-        max_tokens: 150,
+        max_tokens: 200,
         messages: [
           {
             role: "system",
