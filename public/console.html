@@ -93,28 +93,53 @@
             statusText.textContent=statusMap[statusEmoji]||'Unknown';
             speed.textContent=statusEmoji;
             
+            // Parse the OpenAI response
             const payload=data.payload;
-            let d;
-            try{d=JSON.parse(payload)}catch{d={error:payload}};
+            let apiResponse;
+            try{
+              apiResponse=JSON.parse(payload);
+            }catch{
+              console.error('Failed to parse payload');
+              answer.textContent='Parse Error';
+              return;
+            }
             
-            const c=d.choices?.[0]?.message?.content||'{}';
-            let o={};
-            try{o=JSON.parse(c)}catch{o={answer:c}};
+            // Extract the content from OpenAI response
+            const content=apiResponse.choices?.[0]?.message?.content;
+            if(!content){
+              console.error('No content in response');
+              answer.textContent='No Content';
+              return;
+            }
             
+            // Parse the actual answer JSON
+            let answerData;
+            try{
+              answerData=JSON.parse(content);
+            }catch{
+              console.error('Failed to parse content JSON');
+              answer.textContent=content; // Show raw content if not JSON
+              return;
+            }
+            
+            // Extract and display the answer
             let display='';
-            if(o.result_number!==undefined){
-              display=String(o.result_number);
-              if(o.selection?.letter)display+=` (${o.selection.letter})`;
-            }else if(o.answer){
-              display=o.answer;
+            if(answerData.result_number!==undefined){
+              display=String(answerData.result_number);
+              if(answerData.selection?.letter){
+                display+=` (${answerData.selection.letter})`;
+              }
+            }else if(answerData.answer){
+              display=answerData.answer;
             }
             
             answer.textContent=display||'No answer';
             answer.classList.add('pulse');
             setTimeout(()=>answer.classList.remove('pulse'),2000);
             
-            rationale.textContent=o.rationale||'';
+            rationale.textContent=answerData.rationale||'';
             
+            // Color code by status
             if(statusEmoji==='🔴'){
               answer.style.color='#e55353';
             }else if(statusEmoji==='🟢'){
@@ -125,11 +150,14 @@
           }
         }catch(err){
           console.error('Parse error:',err);
+          answer.textContent='Error';
+          rationale.textContent=err.message;
         }
       };
       
       eventSource.onerror=()=>{
         console.log('Connection lost, reconnecting...');
+        statusText.textContent='Reconnecting...';
         eventSource.close();
         setTimeout(connect,3000);
       };
