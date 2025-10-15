@@ -5,32 +5,145 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>AI Console Display</title>
   <style>
-    body{margin:0;background:#000;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;text-align:center}
-    #emoji{font-size:48px;margin-bottom:20px}
-    #answer{font-size:64px;font-weight:900;margin-bottom:20px}
-    #rationale{font-size:24px;opacity:.8}
+    body{
+      margin:0;
+      background:#000;
+      color:#fff;
+      font-family:-apple-system,system-ui,sans-serif;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      height:100vh;
+      text-align:center;
+      padding:20px;
+    }
+    #status{
+      font-size:32px;
+      margin-bottom:30px;
+      opacity:.9;
+      display:flex;
+      align-items:center;
+      gap:15px;
+    }
+    #emoji{font-size:48px}
+    #answer{
+      font-size:120px;
+      font-weight:900;
+      margin-bottom:30px;
+      line-height:1.1;
+      text-shadow:0 0 40px rgba(44,123,229,.3);
+    }
+    #rationale{
+      font-size:28px;
+      opacity:.7;
+      max-width:800px;
+      line-height:1.4;
+    }
+    #speed{font-size:36px;margin-left:10px}
+    .pulse{
+      animation:pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse{
+      0%,100%{opacity:1}
+      50%{opacity:.6}
+    }
+    @media(max-width:800px){
+      #answer{font-size:72px}
+      #rationale{font-size:20px}
+      #status{font-size:24px}
+    }
   </style>
 </head>
 <body>
-  <div id="emoji">💤 Idle</div>
+  <div id="status">
+    <span id="emoji">💤</span>
+    <span id="statusText">Idle</span>
+    <span id="speed">🚦</span>
+  </div>
   <div id="answer">Waiting...</div>
   <div id="rationale"></div>
+  
   <script>
-    const e=document.getElementById('emoji'),a=document.getElementById('answer'),r=document.getElementById('rationale');
-    const s=new EventSource('/events');
-    s.onmessage=(msg)=>{
-      try{
-        const data=JSON.parse(msg.data);
-        if(data.type==='answer'){
-          e.textContent=data.internet||'💤';
-          const payload=data.payload;
-          let d;try{d=JSON.parse(payload);}catch{d={error:payload}};
-          const c=d.choices?.[0]?.message?.content||'{}';let o={};try{o=JSON.parse(c);}catch{o={answer:c}};
-          a.textContent=o.result_number||o.answer||'No answer';
-          r.textContent=o.rationale||'';
-        }
-      }catch(err){console.error(err);}
+    const emoji=document.getElementById('emoji');
+    const statusText=document.getElementById('statusText');
+    const answer=document.getElementById('answer');
+    const rationale=document.getElementById('rationale');
+    const speed=document.getElementById('speed');
+    
+    const statusMap={
+      '🟢':'Question detected',
+      '🟡':'New question',
+      '🔵':'Stable',
+      '🔴':'Error',
+      '💤':'Idle'
     };
+    
+    let eventSource;
+    
+    function connect(){
+      eventSource=new EventSource('/events');
+      
+      eventSource.onmessage=(msg)=>{
+        try{
+          const data=JSON.parse(msg.data);
+          if(data.type==='answer'){
+            const statusEmoji=data.internet||'💤';
+            emoji.textContent=statusEmoji;
+            statusText.textContent=statusMap[statusEmoji]||'Unknown';
+            speed.textContent=statusEmoji;
+            
+            const payload=data.payload;
+            let d;
+            try{d=JSON.parse(payload)}catch{d={error:payload}};
+            
+            const c=d.choices?.[0]?.message?.content||'{}';
+            let o={};
+            try{o=JSON.parse(c)}catch{o={answer:c}};
+            
+            let display='';
+            if(o.result_number!==undefined){
+              display=String(o.result_number);
+              if(o.selection?.letter)display+=` (${o.selection.letter})`;
+            }else if(o.answer){
+              display=o.answer;
+            }
+            
+            answer.textContent=display||'No answer';
+            answer.classList.add('pulse');
+            setTimeout(()=>answer.classList.remove('pulse'),2000);
+            
+            rationale.textContent=o.rationale||'';
+            
+            if(statusEmoji==='🔴'){
+              answer.style.color='#e55353';
+            }else if(statusEmoji==='🟢'){
+              answer.style.color='#0fa77a';
+            }else{
+              answer.style.color='#fff';
+            }
+          }
+        }catch(err){
+          console.error('Parse error:',err);
+        }
+      };
+      
+      eventSource.onerror=()=>{
+        console.log('Connection lost, reconnecting...');
+        eventSource.close();
+        setTimeout(connect,3000);
+      };
+    }
+    
+    connect();
+    
+    // Ping check
+    setInterval(()=>{
+      if(eventSource.readyState===2){
+        console.log('Reconnecting...');
+        connect();
+      }
+    },5000);
   </script>
 </body>
 </html>
