@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Screen Reader AI – (GPT‑4o + PNG)</title>
+  <title>Screen Reader AI – (GPT-4o + PNG)</title>
   <style>
     :root{--bg:#0b0b0c;--ink:#fff;--muted:#9aa0a6;--panel:#121316;--stroke:#2a2b2f;--brand:#2c7be5;--ok:#0fa77a}
     *{box-sizing:border-box}
@@ -31,12 +31,17 @@
       <div class="row">
         <button id="startCam">Start Camera</button>
         <button id="askNow">Ask Now</button>
-        <label class="meta" style="margin-left:auto"><input id="autoSend" type="checkbox" checked> Auto‑send</label>
+        <label class="meta" style="margin-left:auto"><input id="autoSend" type="checkbox" checked> Auto-send</label>
       </div>
-      <div class="row meta">
-        <span id="status">Status: idle</span>
-        <span id="note"> • Server handles /ask on this same domain</span>
+
+      <!-- Emoji status bar -->
+      <div class="row meta" id="statusBar" style="gap:12px">
+        <span id="emoji">💤 Idle</span>
+        <span id="hashNote"></span>
+        <span id="cooldownNote"></span>
+        <span id="status" style="margin-left:auto">Status: idle</span>
       </div>
+
       <div class="panes">
         <div class="pane">
           <div class="muted">Working</div>
@@ -54,11 +59,39 @@
 
   <canvas id="frame" width="640" height="480" style="display:none"></canvas>
   <script>
-    const video=document.getElementById('cam'),startCam=document.getElementById('startCam'),askNow=document.getElementById('askNow');
-    const statusEl=document.getElementById('status'),frame=document.getElementById('frame'),ctx=frame.getContext('2d');
-    const workingBig=document.getElementById('workingBig'),workingRat=document.getElementById('workingRat');
-    const lockedBig=document.getElementById('lockedBig'),lockedRat=document.getElementById('lockedRat');
+    const video=document.getElementById('cam'), startCam=document.getElementById('startCam'), askNow=document.getElementById('askNow');
+    const statusEl=document.getElementById('status'), frame=document.getElementById('frame'), ctx=frame.getContext('2d');
+    const workingBig=document.getElementById('workingBig'), workingRat=document.getElementById('workingRat');
+    const lockedBig=document.getElementById('lockedBig'), lockedRat=document.getElementById('lockedRat');
     const autoSend=document.getElementById('autoSend');
+    const emoji=document.getElementById('emoji'), hashNote=document.getElementById('hashNote'), cooldownNote=document.getElementById('cooldownNote');
+
+    // --- Change-detection + cadence ---
+    const GRID = 8;                 // 8x8 perceptual hash grid
+    const CHANGE_THRESHOLD = 0.12;  // % different cells to count as "changed"
+    const NEW_Q_THRESHOLD   = 0.20; // % to consider a totally new question
+    const STABLE_FRAMES = 3;        // need N stable checks before sending
+    const MIN_INTERVAL_MS = 2500;   // hard cooldown between sends
+
+    // --- PNG downscale (speed) ---
+    const MAX_SEND_WIDTH = 1280;    // shrink large camera frames before PNG
+
+    let busy=false, lastSent=0, stableCount=0;
+    let lastHash='', lockedHash='', lockedAnswer=null;
+
+    function setState(kind, extra='') {
+      // 1) Question Detected – Asking AI   2) New Question Detected – Asking AI
+      // 3) No New Question Detected        4) Error, plus 'idle'
+      const map = {
+        asking: '🤖 Question detected — asking AI…',
+        newq:   '🆕 New question detected — asking AI…',
+        nonew:  '🔒 No new question detected',
+        error:  '❌ Error',
+        idle:   '💤 Idle'
+      };
+      emoji.textContent = map[kind] || 'ℹ️';
+      if (extra) emoji.textContent += ` ${extra}`;
+    }
 
     async function startCamera(){
       try{
@@ -66,34 +99,122 @@
         video.srcObject=stream; await video.play();
         frame.width=video.videoWidth||640; frame.height=video.videoHeight||480;
         statusEl.textContent='Status: camera running';
+        setState('idle');
         loop();
       }catch(e){ alert('Camera permission denied or page not using HTTPS'); console.error(e); }
     }
     startCam.onclick=startCamera;
 
-    let busy=false, lastSent=0;
+    // Perceptual hash on 8x8 grid
+    function getHash() {
+      const w=frame.width, h=frame.height;
+      const cellW=Math.floor(w/GRID), cellH=Math.floor(h/GRID);
+      const img=ctx.getImageData(0,0,w,h).data;
+      let out='';
+      for (let gy=0; gy<GRID; gy++){
+        for (let gx=0; gx<GRID; gx++){
+          let sum=0, cnt=0;
+          const sx=gx*cellW, sy=gy*cellH;
+          for (let y=sy; y<sy+cellH && y<h; y++){
+            for (let x=sx; x<sx+cellW && x<w; x++){
+              const i=(y*w+x)*4;
+              sum += (img[i]+img[i+1]+img[i+2])/3; cnt++;
+            }
+          }
+          out += Math.floor(sum/cnt/32).toString();
+        }
+      }
+      return out;
+    }
+    function diffHash(a,b){
+      if(!a||!b||a.length!==b.length) return 1;
+      let d=0; for(let i=0;i<a.length;i++) if(a[i]!==b[i]) d++;
+      return d/a.length;
+    }
+
+    function cooldownLeft() {
+      const left = MIN_INTERVAL_MS - (Date.now()-lastSent);
+      return Math.max(0, left);
+    }
+
     function loop(){
       ctx.drawImage(video,0,0,frame.width,frame.height);
-      if(autoSend.checked && !busy && Date.now()-lastSent>1500){ captureAndSend(); }
+      const h = getHash();
+      const d = diffHash(h, lastHash);
+      hashNote.textContent = `Δ ${Math.round(d*100)}%`;
+
+      if (autoSend.checked && !busy){
+        if (cooldownLeft() > 0){
+          cooldownNote.textContent = `⏱ ${Math.ceil(cooldownLeft()/1000)}s`;
+        } else {
+          cooldownNote.textContent = '';
+          if (d < CHANGE_THRESHOLD){
+            // stable
+            stableCount++;
+            if (stableCount >= STABLE_FRAMES){
+              const newQ = lockedHash && diffHash(h, lockedHash) > NEW_Q_THRESHOLD;
+              setState(newQ ? 'newq' : 'asking');
+              sendFrame(h);
+              stableCount = 0;
+            }
+          } else {
+            // changed too much; reset stability
+            stableCount = 0;
+            if (lockedAnswer && lockedHash) setState('nonew', `(${Math.round(d*100)}%)`);
+          }
+        }
+      }
+      lastHash = h;
       requestAnimationFrame(loop);
     }
-    askNow.onclick=captureAndSend;
 
-    async function captureAndSend(){
-      if(busy) return; busy=true; lastSent=Date.now();
-      const base64=frame.toDataURL('image/png').split(',')[1];
+    askNow.onclick = ()=>{ const h=getHash(); setState('asking'); sendFrame(h); };
+
+    // Downscale to speed up PNGs massively
+    function toBase64PNG(){
+      const sw = frame.width;
+      const scale = Math.min(1, MAX_SEND_WIDTH / sw);
+      if (scale === 1){
+        return frame.toDataURL('image/png').split(',')[1];
+      }
+      const tw = Math.round(frame.width*scale), th = Math.round(frame.height*scale);
+      const off = document.createElement('canvas');
+      off.width = tw; off.height = th;
+      off.getContext('2d').drawImage(frame, 0, 0, tw, th);
+      return off.toDataURL('image/png').split(',')[1];
+    }
+
+    async function sendFrame(currentHash){
       try{
-        const r=await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({imageBase64:base64})});
-        const data=await r.json();
-        const txt=data.choices?.[0]?.message?.content||'{}';
-        let obj={}; try{ obj=JSON.parse(txt); }catch(_){ obj={answer:txt}; }
-        workingBig.textContent=obj.answer||'No answer';
-        workingRat.textContent=obj.rationale||'';
-        lockedBig.textContent=obj.answer||'No answer';
-        lockedRat.textContent=obj.rationale||'';
-      }catch(e){
-        workingBig.textContent='Error'; workingRat.textContent=e.message||String(e);
-      }finally{ busy=false; }
+        busy=true; lastSent=Date.now();
+        const base64 = toBase64PNG();
+        const r = await fetch('/ask', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ imageBase64: base64 })
+        });
+        const text = await r.text();
+        let data; try { data = JSON.parse(text); } catch { data = { error: text }; }
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+
+        const content = data.choices?.[0]?.message?.content || '{}';
+        let obj={}; try{ obj=JSON.parse(content); }catch{ obj={answer:content}; }
+
+        // show & lock
+        workingBig.textContent = obj.answer || 'No answer';
+        workingRat.textContent = obj.rationale || '';
+        lockedBig.textContent  = obj.answer || 'No answer';
+        lockedRat.textContent  = obj.rationale || '';
+        lockedAnswer = obj.answer || null;
+        lockedHash = currentHash;
+        setState('nonew');
+      } catch(e){
+        workingBig.textContent='Error';
+        workingRat.textContent=e.message||String(e);
+        setState('error', e.message||'');
+      } finally {
+        busy=false;
+      }
     }
   </script>
 </body>
