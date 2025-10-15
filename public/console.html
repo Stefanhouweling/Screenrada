@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AI Console Display</title>
+  <style>
+    body{margin:0;background:#000;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;text-align:center}
+    #emoji{font-size:48px;margin-bottom:20px}
+    #answer{font-size:64px;font-weight:900;margin-bottom:20px}
+    #rationale{font-size:24px;opacity:.8}
+  </style>
+</head>
+<body>
+  <div id="emoji">💤 Idle</div>
+  <div id="answer">Waiting...</div>
+  <div id="rationale"></div>
+  <script>
+    const e=document.getElementById('emoji'),a=document.getElementById('answer'),r=document.getElementById('rationale');
+    const s=new EventSource('/events');
+    s.onmessage=(msg)=>{
+      try{
+        const data=JSON.parse(msg.data);
+        if(data.type==='answer'){
+          e.textContent=data.internet||'💤';
+          const payload=data.payload;
+          let d;try{d=JSON.parse(payload);}catch{d={error:payload}};
+          const c=d.choices?.[0]?.message?.content||'{}';let o={};try{o=JSON.parse(c);}catch{o={answer:c}};
+          a.textContent=o.result_number||o.answer||'No answer';
+          r.textContent=o.rationale||'';
+        }
+      }catch(err){console.error(err);}
+    };
+  </script>
+</body>
+</html>
