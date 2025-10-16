@@ -3,11 +3,10 @@
   "private": true,
   "type": "module",
   "version": "1.0.0",
-  "engines": {
-    "node": ">=18"
-  },
+  "engines": { "node": ">=18" },
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node server.js",
+    "dev": "node --watch server.js"
   },
   "dependencies": {
     "express": "^4.19.2"
