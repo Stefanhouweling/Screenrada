@@ -3,270 +3,79 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Screenrada – Vision AI</title>
+  <title>Screenrada – Scroll-to-Capture</title>
   <style>
-    :root{--bg:#0b0b0c;--ink:#fff;--muted:#9aa0a6;--panel:#121316;--stroke:#2a2b2f;--brand:#2c7be5;--ok:#0fa77a;--err:#e55353;--warn:#f5a623}
-    *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,system-ui,sans-serif}
-    .app{height:100dvh;display:grid;grid-template-rows:1fr 1.05fr}
-    video{width:100%;height:100%;object-fit:cover;background:#000}
-    .bottom{padding:10px;display:flex;flex-direction:column;gap:8px}
-    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-    .meta{font-size:12px;opacity:.9}
-    .panes{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-    .pane{background:var(--panel);border:1px solid var(--stroke);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px}
-    .big{font-weight:800;font-size:28px}
-    .muted{opacity:.9;font-size:12px;white-space:pre-wrap}
-    .answer{border:1px solid var(--stroke);border-radius:10px;padding:10px;background:#0e0f12;min-height:80px;white-space:pre-wrap}
-    .pbar{position:relative;width:200px;height:6px;border-radius:999px;background:#1a1b1f;border:1px solid #2a2b2f;overflow:hidden}
-    .pbar>i{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--brand),#6aa6ff);transition:width .15s}
-    .err{color:var(--err)}.warn{color:var(--warn)}.ok{color:var(--ok)}
-    .speed-indicator{font-size:18px;margin-left:auto}
-    .timer{font-weight:700;color:var(--brand)}
-    @media(max-width:800px){.panes{grid-template-columns:1fr}}
+    body{margin:0;background:#0b0b0c;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;gap:1rem;padding:1rem}
+    video{width:90vw;max-width:800px;border-radius:10px;background:#000}
+    #status{font-size:16px;opacity:.9}
+    #link a{color:#2c7be5;text-decoration:none;font-weight:600}
   </style>
 </head>
 <body>
-  <div class="app">
-    <section class="top"><video id="cam" autoplay playsinline muted></video></section>
-    <section class="bottom">
-      <div class="row meta" style="gap:12px">
-        <span id="emoji">💤 Idle</span><span id="hashNote"></span><span id="cooldownNote"></span>
-        <div class="pbar"><i id="pfill"></i></div><span id="ppct">0%</span>
-        <span id="timer" class="timer"></span>
-        <span id="speed" class="speed-indicator">🚦</span>
-        <span id="net" style="margin-left:4px">Status: idle</span>
-      </div>
-      <div class="panes">
-        <div class="pane">
-          <div class="muted">Working</div>
-          <div id="workingBig" class="answer big">No response</div>
-          <div id="workingRat" class="answer muted"></div>
-        </div>
-        <div class="pane">
-          <div class="muted">Locked</div>
-          <div id="lockedBig" class="answer big">–</div>
-          <div id="lockedRat" class="answer muted"></div>
-        </div>
-      </div>
-    </section>
-  </div>
-
-  <!-- Hidden canvas used to capture the FULL frame at native resolution -->
-  <canvas id="frame" width="640" height="480" style="display:none"></canvas>
+  <h2>📷 Screenrada — Auto Snapshot</h2>
+  <video id="cam" autoplay playsinline muted></video>
+  <canvas id="frame" style="display:none"></canvas>
+  <div id="status">Initializing camera...</div>
+  <div id="link">View console → <a href="/console" target="_blank">/console</a></div>
 
   <script>
-    const v=document.getElementById('cam'),f=document.getElementById('frame'),ctx=f.getContext('2d',{willReadFrequently:true});
-    const workingBig=document.getElementById('workingBig'),workingRat=document.getElementById('workingRat');
-    const lockedBig=document.getElementById('lockedBig'),lockedRat=document.getElementById('lockedRat');
-    const emoji=document.getElementById('emoji'),hashNote=document.getElementById('hashNote'),cooldownNote=document.getElementById('cooldownNote');
-    const pfill=document.getElementById('pfill'),ppct=document.getElementById('ppct'),net=document.getElementById('net'),speed=document.getElementById('speed');
-    const timer=document.getElementById('timer');
+    const v=document.getElementById('cam');
+    const c=document.getElementById('frame');
+    const ctx=c.getContext('2d',{willReadFrequently:true});
+    const status=document.getElementById('status');
+    let scrollTimer=null,busy=false;
 
-    /* ===== Sensitivity tuning (lowered) ===== */
-    const GRID=8;
-    const CHANGE_THRESHOLD=.08;     // small change counts as “stable”
-    const NEW_Q_THRESHOLD=.12;      // difference from locked to call it “new”
-    const STABLE_FRAMES=2;
-    const MIN_INTERVAL_MS=2500;
-    const SCROLL_DEBOUNCE_MS=180;
-    const MUTATION_DEBOUNCE_MS=120;
-
-    /* ===== State ===== */
-    let busy=false,lastSent=0,stableCount=0,lastHash='',lockedHash='',lockedAnswer=null;
-    let uploadSpeeds=[],restartTimeout=null,requestStartTime=0,queuedCapture=false;
-
-    /* ===== Network status ===== */
-    function paintNet(){
-      const online=navigator.onLine;
-      net.textContent=online?'Status: online':'Status: offline';
-      net.classList.toggle('err',!online);
-      if(!online) speed.textContent='🔴';
-    }
-    addEventListener('online',paintNet); addEventListener('offline',paintNet); paintNet();
-
-    function updateSpeedIndicator(){
-      if(!navigator.onLine){speed.textContent='🔴';return}
-      const avg=uploadSpeeds.length?uploadSpeeds.reduce((a,b)=>a+b)/uploadSpeeds.length:0;
-      if(avg>400){speed.textContent='🟢'}
-      else if(avg>200){speed.textContent='🟡'}
-      else{speed.textContent='🔴'}
-    }
-
-    function setState(k,extra=''){
-      const m={ asking:'🟢 Question detected — asking AI', newq:'🟡 New question — sending…', nonew:'🔵 No new question', error:'🔴 Error / retrying', idle:'💤 Idle' };
-      emoji.textContent=(m[k]||'ℹ️')+(extra?` ${extra}`:'');
-      clearTimeout(restartTimeout);
-      if(k==='error') restartTimeout=setTimeout(()=>{busy=false;setState('idle')},5000);
-    }
-
-    /* ===== Camera ===== */
+    // Start camera
     async function startCam(){
       try{
         const s=await navigator.mediaDevices.getUserMedia({
-          video:{ facingMode:'environment', width:{ideal:1920}, height:{ideal:1080} }, audio:false
+          video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}},audio:false
         });
         v.srcObject=s; await v.play();
-
-        // Set canvas to native sensor size (no scale)
-        const vw=v.videoWidth||1280, vh=v.videoHeight||720;
-        f.width=vw; f.height=vh;
-
-        setState('idle');
-        loop();
+        status.textContent='✅ Camera ready. Scroll to trigger snapshot.';
       }catch(e){
-        alert('Camera permission or HTTPS required');
-        console.error(e);
+        status.textContent='❌ Camera error: '+e.message;
       }
     }
-    startCam();
 
-    /* ===== Always draw FULL frame (no crop, no filter) ===== */
-    function drawFullFrame(){
-      const vw=v.videoWidth||f.width, vh=v.videoHeight||f.height;
-      if(f.width!==vw || f.height!==vh){ f.width=vw; f.height=vh; }
-      ctx.imageSmoothingEnabled=false;
-      ctx.drawImage(v,0,0,vw,vh);
+    // Capture full frame as PNG
+    function captureBase64(){
+      const w=v.videoWidth||1280, h=v.videoHeight||720;
+      c.width=w; c.height=h;
+      ctx.drawImage(v,0,0,w,h);
+      return c.toDataURL('image/png').split(',')[1];
     }
 
-    /* ===== Perceptual hash for change detection ===== */
-    function getHash(){
-      const w=f.width,h=f.height,cw=Math.floor(w/GRID),ch=Math.floor(h/GRID);
-      const img=ctx.getImageData(0,0,w,h).data; let o='';
-      for(let gy=0;gy<GRID;gy++)for(let gx=0;gx<GRID;gx++){
-        let s=0,c=0,sy=gy*ch,sx=gx*cw;
-        for(let y=sy;y<sy+ch&&y<h;y++)for(let x=sx;x<sx+cw&&x<w;x++){
-          const i=(y*w+x)*4; s+=(img[i]+img[i+1]+img[i+2])/3; c++;
-        }
-        o+=Math.floor(s/c/32);
-      }
-      return o;
-    }
-    function diffHash(a,b){ if(!a||!b||a.length!==b.length) return 1; let d=0; for(let i=0;i<a.length;i++) if(a[i]!==b[i]) d++; return d/a.length; }
-
-    const cooldownLeft=()=>Math.max(0,MIN_INTERVAL_MS-(Date.now()-lastSent));
-    function setProgress(p){pfill.style.width=p+'%';ppct.textContent=p+'%'}
-    function updateTimer(){ if(requestStartTime){ const s=((Date.now()-requestStartTime)/1000).toFixed(1); timer.textContent=s+'s'; if(busy) requestAnimationFrame(updateTimer); } }
-
-    /* ===== Scroll & DOM mutation triggers ===== */
-    let scrollTimer=null, mutationTimer=null;
-    function queueCapture(){ queuedCapture=true; stableCount=STABLE_FRAMES; }
-    ["scroll","wheel","touchmove","keydown"].forEach(evt=>{
-      window.addEventListener(evt,()=>{ if(scrollTimer) clearTimeout(scrollTimer); scrollTimer=setTimeout(queueCapture, SCROLL_DEBOUNCE_MS); }, {passive:true});
-    });
-    const mo=new MutationObserver(()=>{ if(mutationTimer) clearTimeout(mutationTimer); mutationTimer=setTimeout(queueCapture, MUTATION_DEBOUNCE_MS); });
-    mo.observe(document.documentElement,{subtree:true,childList:true,characterData:true});
-
-    /* ===== Main loop ===== */
-    function loop(){
-      drawFullFrame();
-      const h=getHash(), d=diffHash(h,lastHash);
-      hashNote.textContent=`Δ ${Math.round(d*100)}%`;
-
-      if(!busy){
-        const cd=cooldownLeft();
-        if(cd>0){
-          cooldownNote.textContent=`⏱ ${Math.ceil(cd/1000)}s`;
-        }else{
-          cooldownNote.textContent='';
-
-          if(queuedCapture){
-            queuedCapture=false;
-            const changeFromLocked=lockedHash?diffHash(h,lockedHash):1;
-            setState(changeFromLocked>NEW_Q_THRESHOLD?'newq':'asking');
-            send(h); stableCount=0; lastHash=h; requestAnimationFrame(loop); return;
-          }
-
-          if(lockedHash && diffHash(h,lockedHash)<NEW_Q_THRESHOLD){
-            setState('nonew','(locked)');
-            lastHash=h; requestAnimationFrame(loop); return;
-          }
-
-          if(d<CHANGE_THRESHOLD){
-            if(++stableCount>=STABLE_FRAMES){
-              const isNewQ=lockedHash && diffHash(h,lockedHash)>NEW_Q_THRESHOLD;
-              setState(isNewQ?'newq':'asking');
-              send(h); stableCount=0;
-            }
-          }else{
-            stableCount=0;
-          }
-        }
-      }
-      lastHash=h;
-      requestAnimationFrame(loop);
-    }
-
-    /* ===== Full-frame PNG capture & send ===== */
-    function captureBase64PNG(){
-      // Lossless PNG of the full native frame — same as a manual upload to ChatGPT
-      return f.toDataURL('image/png').split(',')[1];
-    }
-
-    async function send(cur,retryCount=0){
-      busy=true; lastSent=Date.now(); requestStartTime=Date.now(); setProgress(0); updateTimer();
-
-      // Re-draw to ensure we send this exact frame
-      drawFullFrame();
-      const base=captureBase64PNG();
-      const sizeKB=(base.length*0.75)/1024;
-
+    // Send to server → triggers console update
+    async function sendImage(base64){
+      busy=true;
+      status.textContent='⏳ Sending to GPT-4o...';
       try{
-        const response=await fetch('/ask',{
+        const r=await fetch('/ask',{
           method:'POST',
           headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({ imageBase64:base })
+          body:JSON.stringify({imageBase64:base64})
         });
-
-        const elapsed=(Date.now()-requestStartTime)/1000;
-        uploadSpeeds.push(sizeKB/elapsed); if(uploadSpeeds.length>5) uploadSpeeds.shift(); updateSpeedIndicator();
-
-        setProgress(100);
-        const text=await response.text();
-        handle(response.status,text,cur);
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        status.textContent='✅ Sent! Waiting for console update...';
       }catch(e){
-        if(retryCount<1){
-          console.warn('Retrying upload once…');
-          setTimeout(()=>send(cur,retryCount+1),800);
-        }else{
-          err('Upload failed: '+e.message);
-        }
+        status.textContent='❌ Error: '+e.message;
       }
-    }
-
-    /* ===== Error + response handling ===== */
-    function err(msg){
-      busy=false; requestStartTime=0; timer.textContent='';
-      workingBig.textContent='Error';
-      workingRat.textContent=msg;
-      setState('error',msg);
-    }
-
-    function handle(status,text,cur){
       busy=false;
-      const totalTime=((Date.now()-requestStartTime)/1000).toFixed(2);
-      requestStartTime=0; timer.textContent=totalTime+'s ✓'; setTimeout(()=>timer.textContent='',3000);
-
-      if(status<200||status>=300){ err('HTTP '+status); return; }
-
-      let d; try{ d=JSON.parse(text); }catch{ err('Failed to parse response'); return; }
-      const c=d.choices?.[0]?.message?.content; if(!c){ err('No content in response'); return; }
-
-      let o; try{ o=JSON.parse(c); }catch{ err('Invalid JSON in content'); return; }
-
-      let display='',extra='';
-      if(o.answer!==undefined){ display=String(o.answer); extra=o.work?'— '+o.work:''; }
-      else if(o.result_number!==undefined){ display=String(o.result_number); }
-
-      workingBig.textContent=display||'No answer';
-      workingRat.textContent=extra||'';
-      lockedBig.textContent=display||'No answer';
-      lockedRat.textContent=extra||'';
-      lockedAnswer=display; lockedHash=cur; setProgress(100); setState('nonew');
     }
 
-    /* ===== Safety watchdog ===== */
-    setInterval(()=>{ if(v.paused||v.ended){ console.log('Camera frozen, restarting…'); startCam(); } },10000);
+    // Scroll-stop detector
+    window.addEventListener('scroll',()=>{
+      if(scrollTimer) clearTimeout(scrollTimer);
+      scrollTimer=setTimeout(()=>{
+        if(!busy){
+          const img=captureBase64();
+          sendImage(img);
+        }
+      },1000);
+    },{passive:true});
+
+    startCam();
   </script>
 </body>
 </html>
