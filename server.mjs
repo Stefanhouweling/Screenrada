@@ -1,7 +1,10 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import fetch from "node-fetch"; // if on Node < 18, keep; on 18+ you can remove this import
+
+// If you’re on Node <18, uncomment the next two lines:
+// import fetch from "node-fetch";
+// globalThis.fetch = fetch;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,54 +15,58 @@ app.use(express.json({ limit: "20mb" }));
 const PORT = process.env.PORT || 10000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-if (!OPENAI_API_KEY) {
-  console.warn("⚠️  OPENAI_API_KEY missing. Set it in your env.");
-}
-
-// SSE clients for console (optional console UI you had)
+// SSE clients for console (optional external display)
 let consoleClients = [];
 
-/** POST /ask — proxy to OpenAI with strict JSON + re-read fallback */
+/** Helpers */
+function sseBroadcast(payload) {
+  const str = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const c of consoleClients) c.write(str);
+}
+
+/** Proxy endpoint to OpenAI with re-read & reconcile logic */
 app.post("/ask", async (req, res) => {
   try {
     const { imageBase64 } = req.body || {};
-    if (!imageBase64) return res.status(400).json({ error: "Missing imageBase64" });
+    if (!imageBase64) {
+      return res.status(400).json({ error: "Missing imageBase64" });
+    }
 
     const body = {
       model: "gpt-4o",
       temperature: 0,
-      max_tokens: 400,
+      max_tokens: 450, // extra room for the re-read step
       messages: [
         {
           role: "system",
-          content: `You are a math problem solver for MULTIPLE-CHOICE questions shown in an IMAGE.
+          content: `You solve MULTIPLE-CHOICE math questions from an IMAGE.
 
-Protocol:
-1) OCR carefully: extract the question text AND every option letter+text (A–D etc).
-2) Identify what is being asked.
-3) Compute the answer step-by-step with precise arithmetic (currency to two decimals).
+STRICT protocol:
+1) OCR carefully: extract the question and ALL options (A–D etc) exactly as seen.
+2) Identify what's being asked.
+3) Compute the answer step-by-step with precise arithmetic (money to 2 decimals).
 4) MATCHING:
-   - Try exact match to one option (normalize spaces, commas, currency symbols).
-   - If no exact match: RE-READ the NUMBERS from the image and RE-CALCULATE once.
-     Prefer numbers near currency symbols ($) and those within the options block.
-     Consider common OCR slips (6↔5, 8↔3, 0↔6, 1.00↔1.0, .50↔0.50).
-   - If still no match, convert your result into the options’ format (mixed numbers, fractions, decimals).
-5) Only if there is truly no match after re-read and conversions, set matched_option=null.
+   - Try exact match to one option (normalize spaces/currency symbols).
+   - If no match: RE-READ the numbers from the image ONCE and RE-CALCULATE.
+     * Prioritize numbers adjacent to $ or % and numbers inside the options list.
+     * Consider typical OCR slips: 6↔5, 8↔3, 0↔6, 1.00↔1.0, 0.50↔.50.
+   - If still no match, convert your result to the options' format (fraction/decimal/mixed).
+5) If after re-read + conversions there is truly no match, set matched_option=null.
 
 Return STRICT JSON ONLY:
 {
  "question": "...",
- "options": ["A. ...", "B. ...", "C. ...", "D. ..."],
+ "options": ["A. ...","B. ...","C. ...","D. ..."],
  "calculated_answer": "...",
  "answer": "...",
  "matched_option": "A"|"B"|"C"|"D"|null,
- "work": "concise steps, include any number corrections/conversions"
+ "work": "concise steps incl. any number corrections/conversions"
 }`
         },
         {
           role: "user",
           content: [
-            { type: "text", text: "Solve and match to an option. Show concise steps." },
+            { type: "text", text: "Solve and match to one option. Show concise steps." },
             { type: "image_url", image_url: { url: `data:image/png;base64,${imageBase64}` } }
           ]
         }
@@ -67,46 +74,30 @@ Return STRICT JSON ONLY:
       response_format: { type: "json_object" }
     };
 
-    // Basic retry on transient upstream errors
-    const doFetch = async (attempt = 0) => {
-      const r = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify(body),
-      });
-      if ((r.status === 502 || r.status === 503 || r.status === 504) && attempt < 2) {
-        await new Promise(r => setTimeout(r, 400 + attempt * 600));
-        return doFetch(attempt + 1);
-      }
-      return r;
-    };
-
-    const r = await doFetch();
-    const text = await r.text();
-
-    const statusEmoji = r.ok ? "🟢" : "🔴";
-    consoleClients.forEach(client => {
-      client.write(`data: ${JSON.stringify({ type: 'answer', internet: statusEmoji, payload: text })}\n\n`);
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify(body),
     });
 
+    const text = await r.text();
+    sseBroadcast({ type: "answer", internet: r.ok ? "🟢" : "🔴", payload: text });
     res.status(r.status).type("application/json").send(text);
   } catch (e) {
-    consoleClients.forEach(client => {
-      client.write(`data: ${JSON.stringify({ type: 'answer', internet: "🔴", payload: JSON.stringify({error: e.message}) })}\n\n`);
-    });
+    sseBroadcast({ type: "answer", internet: "🔴", payload: JSON.stringify({ error: e.message }) });
     res.status(500).json({ error: e.message || "Server error" });
   }
 });
 
-/** SSE endpoint (optional console) */
+/** SSE console endpoint */
 app.get("/events", (req, res) => {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
-    "Connection": "keep-alive"
+    "Connection": "keep-alive",
   });
   consoleClients.push(res);
   req.on("close", () => {
