@@ -80,7 +80,7 @@
     };
     
     let eventSource;
-    
+
     function connect(){
       eventSource=new EventSource('/events');
       
@@ -116,6 +116,7 @@
             }catch{
               console.error('Failed to parse content JSON');
               answer.textContent=content;
+              renderMath();
               return;
             }
             
@@ -126,11 +127,12 @@
               display=String(answerData.result_number);
             }
             
-            answer.textContent=display||'No answer';
+            answer.innerHTML=display||'No answer';
             answer.classList.add('pulse');
             setTimeout(()=>answer.classList.remove('pulse'),2000);
             
-            rationale.textContent=answerData.work||'';
+            rationale.innerHTML=answerData.work||'';
+            renderMath();
             
             if(statusEmoji==='🔴'){
               answer.style.color='#e55353';
@@ -163,6 +165,16 @@
         connect();
       }
     },5000);
+  </script>
+
+  <!-- MathJax for rendering fractions, equations, etc. -->
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <script>
+    function renderMath(){
+      if(window.MathJax && MathJax.typesetPromise){
+        MathJax.typesetPromise();
+      }
+    }
   </script>
 </body>
 </html>
