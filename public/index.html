@@ -3,79 +3,174 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Screenrada – Scroll-to-Capture</title>
+  <title>Screenrada — Scroll-Stop Camera</title>
   <style>
-    body{margin:0;background:#0b0b0c;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;gap:1rem;padding:1rem}
-    video{width:90vw;max-width:800px;border-radius:10px;background:#000}
-    #status{font-size:16px;opacity:.9}
+    body{margin:0;background:#0b0b0c;color:#fff;font-family:-apple-system,system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;gap:1rem;padding:1rem}
+    video{width:90vw;max-width:900px;border-radius:10px;background:#000}
+    #status{font-size:14px;opacity:.9}
     #link a{color:#2c7be5;text-decoration:none;font-weight:600}
   </style>
 </head>
 <body>
-  <h2>📷 Screenrada — Auto Snapshot</h2>
+  <h2>📷 Screenrada — Scroll-Stop Camera</h2>
   <video id="cam" autoplay playsinline muted></video>
   <canvas id="frame" style="display:none"></canvas>
-  <div id="status">Initializing camera...</div>
-  <div id="link">View console → <a href="/console" target="_blank">/console</a></div>
+  <div id="status">Initializing camera…</div>
+  <div id="link">Open console → <a href="/console" target="_blank">/console</a></div>
 
   <script>
-    const v=document.getElementById('cam');
-    const c=document.getElementById('frame');
-    const ctx=c.getContext('2d',{willReadFrequently:true});
-    const status=document.getElementById('status');
-    let scrollTimer=null,busy=false;
+    // ----- DOM refs -----
+    const v = document.getElementById('cam');
+    const f = document.getElementById('frame');
+    const ctx = f.getContext('2d', { willReadFrequently: true });
+    const statusEl = document.getElementById('status');
 
-    // Start camera
-    async function startCam(){
+    // ----- Tuning (you can tweak) -----
+    const GRID = 8;                 // perceptual hash grid
+    const MOTION_STOP_DELTA = 0.10; // <= 10% change counts as "stable"
+    const STABLE_FRAMES = 4;        // need 4 consecutive stable frames
+    const COOL_DOWN_MS = 2000;      // minimum gap between shots
+    const RETAKE_DELAY_MS = 5000;   // wait 5s for possible new question
+    const RETAKE_DIFF = 0.50;       // >50% change ⇒ retake one more photo
+
+    // ----- State -----
+    let lastHash = '';
+    let stableCount = 0;
+    let busy = false;
+    let lastShotAt = 0;
+    let hashAtShot = null;
+    let retakeTimer = null;
+
+    // Optional: listen to /events so the console pipeline is clearly alive
+    const es = new EventSource('/events');
+    es.onmessage = () => {}; // no-op; console page will handle display
+
+    // ----- Camera -----
+    async function startCamera(){
       try{
-        const s=await navigator.mediaDevices.getUserMedia({
-          video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}},audio:false
+        const s = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+          audio: false
         });
-        v.srcObject=s; await v.play();
-        status.textContent='✅ Camera ready. Scroll to trigger snapshot.';
+        v.srcObject = s;
+        await v.play();
+        // set canvas to the native camera size (full frame)
+        f.width = v.videoWidth || 1280;
+        f.height = v.videoHeight || 720;
+        status('✅ Camera ready. I’ll snap when the page stops moving.');
+        loop();
       }catch(e){
-        status.textContent='❌ Camera error: '+e.message;
+        status('❌ Camera error: '+e.message);
       }
     }
 
-    // Capture full frame as PNG
-    function captureBase64(){
-      const w=v.videoWidth||1280, h=v.videoHeight||720;
-      c.width=w; c.height=h;
-      ctx.drawImage(v,0,0,w,h);
-      return c.toDataURL('image/png').split(',')[1];
+    // ----- Draw & hash -----
+    function drawFullFrame(){
+      const vw = v.videoWidth || f.width;
+      const vh = v.videoHeight || f.height;
+      if (f.width !== vw || f.height !== vh) { f.width = vw; f.height = vh; }
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(v, 0, 0, vw, vh);
     }
 
-    // Send to server → triggers console update
-    async function sendImage(base64){
-      busy=true;
-      status.textContent='⏳ Sending to GPT-4o...';
-      try{
-        const r=await fetch('/ask',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({imageBase64:base64})
-        });
-        if(!r.ok) throw new Error('HTTP '+r.status);
-        status.textContent='✅ Sent! Waiting for console update...';
-      }catch(e){
-        status.textContent='❌ Error: '+e.message;
-      }
-      busy=false;
-    }
-
-    // Scroll-stop detector
-    window.addEventListener('scroll',()=>{
-      if(scrollTimer) clearTimeout(scrollTimer);
-      scrollTimer=setTimeout(()=>{
-        if(!busy){
-          const img=captureBase64();
-          sendImage(img);
+    function getHash(){
+      const w=f.width, h=f.height;
+      const cw = Math.floor(w/GRID), ch = Math.floor(h/GRID);
+      const img = ctx.getImageData(0,0,w,h).data;
+      let out = '';
+      for(let gy=0; gy<GRID; gy++){
+        for(let gx=0; gx<GRID; gx++){
+          let sum=0, cnt=0, sy=gy*ch, sx=gx*cw;
+          for(let y=sy; y<sy+ch && y<h; y++){
+            for(let x=sx; x<sx+cw && x<w; x++){
+              const i=(y*w+x)*4;
+              sum += (img[i]+img[i+1]+img[i+2])/3;
+              cnt++;
+            }
+          }
+          out += Math.floor((sum/cnt)/32); // 0..7
         }
-      },1000);
-    },{passive:true});
+      }
+      return out;
+    }
 
-    startCam();
+    function diffHash(a,b){
+      if(!a || !b || a.length!==b.length) return 1;
+      let d=0; for(let i=0;i<a.length;i++) if(a[i]!==b[i]) d++;
+      return d/a.length;
+    }
+
+    // ----- Core loop: detect "scroll stop" from camera -----
+    function loop(){
+      drawFullFrame();
+      const h = getHash();
+      const d = diffHash(h, lastHash);
+
+      // When motion is "low" for enough frames ⇒ consider it a scroll stop
+      if (!busy && d <= MOTION_STOP_DELTA) {
+        if (++stableCount >= STABLE_FRAMES) {
+          maybeShoot(h);
+          stableCount = 0;
+        }
+      } else {
+        stableCount = 0;
+      }
+
+      lastHash = h;
+      requestAnimationFrame(loop);
+    }
+
+    // ----- Shooting logic -----
+    function cooldownOver(){ return (Date.now() - lastShotAt) >= COOL_DOWN_MS; }
+
+    function maybeShoot(currentHash){
+      if (!cooldownOver()) return;
+      shoot(currentHash);
+    }
+
+    function shoot(currentHash){
+      busy = true;
+      lastShotAt = Date.now();
+      hashAtShot = currentHash;
+      status('📸 Capturing…');
+
+      const base64 = f.toDataURL('image/png').split(',')[1]; // full frame, lossless
+      fetch('/ask', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ imageBase64: base64 })
+      }).then(async (r)=>{
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        status('✅ Sent. Watching for change (5s)…');
+        // schedule single retake check in 5s
+        if (retakeTimer) clearTimeout(retakeTimer);
+        retakeTimer = setTimeout(checkForRetake, RETAKE_DELAY_MS);
+      }).catch(e=>{
+        status('❌ Send error: '+e.message);
+      }).finally(()=>{
+        busy = false;
+      });
+    }
+
+    function checkForRetake(){
+      drawFullFrame();
+      const newHash = getHash();
+      const change = diffHash(newHash, hashAtShot || '');
+      if (change > RETAKE_DIFF) {
+        status(`🔁 Big change detected (${Math.round(change*100)}%). Taking another shot…`);
+        if (cooldownOver()) shoot(newHash); // one more shot
+      } else {
+        status(`⏹ No major change (${Math.round(change*100)}%). No retake.`);
+      }
+      hashAtShot = null;
+      retakeTimer = null;
+    }
+
+    // ----- Helpers -----
+    function status(t){ statusEl.textContent = t; }
+
+    // Start
+    startCamera();
   </script>
 </body>
 </html>
