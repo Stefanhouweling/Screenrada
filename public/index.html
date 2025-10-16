@@ -9,6 +9,7 @@
     video{width:90vw;max-width:900px;border-radius:10px;background:#000}
     #status{font-size:14px;opacity:.9}
     #link a{color:#2c7be5;text-decoration:none;font-weight:600}
+    #tap{border:1px solid #444;padding:.6rem 1rem;border-radius:9px;display:none;cursor:pointer}
   </style>
 </head>
 <body>
@@ -16,14 +17,28 @@
   <video id="cam" autoplay playsinline muted></video>
   <canvas id="frame" style="display:none"></canvas>
   <div id="status">Initializing camera…</div>
+  <button id="tap">Tap to start camera</button>
   <div id="link">Open console → <a href="/console.html" target="_blank">/console.html</a></div>
 
   <script>
     // ----- DOM refs -----
     const v = document.getElementById('cam');
     const f = document.getElementById('frame');
-    const ctx = f.getContext('2d', { willReadFrequently: true });
+
+    // SAFARI FIX: get 2D context with safe fallback (older WebKit can throw on options)
+    let ctx;
+    try {
+      ctx = f.getContext('2d', { willReadFrequently: true });
+      if (!ctx) throw new Error('2D context null with options');
+    } catch (e) {
+      ctx = f.getContext('2d');
+    }
+    if (!ctx) {
+      alert('Canvas 2D is not available on this browser.');
+    }
+
     const statusEl = document.getElementById('status');
+    const tapBtn = document.getElementById('tap');
 
     // ----- Tuning (you can tweak) -----
     const GRID = 8;                   // perceptual hash grid
@@ -47,46 +62,71 @@
     let haveAFSupport = false;
     let focusModes = [];
 
-    // Optional: listen to /events so the console pipeline is clearly alive
-    let es;
+    // Optional SSE (don’t let it break the page)
     try{
-      es = new EventSource('/events');
-      es.onmessage = () => {}; // no-op; console page will handle display
-      es.onerror = () => {}; // ignore errors
+      const es = new EventSource('/events');
+      es.onmessage = () => {};
+      es.onerror = () => {};
     }catch(e){
-      console.log('SSE not available:', e);
+      /* ignore */
     }
 
     // ----- Camera -----
     async function startCamera(){
       try{
-        status('📷 Requesting camera access...');
-        
+        status('📷 Requesting camera access…');
+
+        // Some iOS builds require a user gesture before getUserMedia will resolve.
+        // We attempt immediately; if NotAllowedError occurs, show the tap button.
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: 'environment',
-            width: { ideal: 1920 }, 
-            height: { ideal: 1080 }
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 }, height: { ideal: 1080 }
           },
           audio: false
         });
-        
-        status('📷 Camera granted. Setting up...');
+
+        status('📷 Camera granted. Setting up…');
         v.srcObject = stream;
-        await v.play();
+        await v.play().catch(()=>{}); // Safari sometimes rejects but still shows frames
 
         track = stream.getVideoTracks()[0];
-        
+
         // set canvas to the native camera size (full frame)
+        // (guard in case metadata not ready yet)
+        const waitForDims = async () => {
+          for (let i=0;i<20;i++){
+            if (v.videoWidth && v.videoHeight) return;
+            await waitMs(50);
+          }
+        };
+        await waitForDims();
         f.width = v.videoWidth || 1280;
         f.height = v.videoHeight || 720;
-        
-        status('✅ Camera ready. Checking autofocus...');
+
+        status('✅ Camera ready. Checking autofocus…');
         await enableContinuousAFIfSupported();
-        
-        status('✅ Camera ready. I'll snap when the page stops moving.');
+
+        status('✅ Camera ready. I’ll snap when the page stops moving.');
         loop();
       }catch(e){
+        // If permission/gesture needed, show tap-to-start
+        if (String(e.name).includes('NotAllowedError') || String(e).includes('Permission')) {
+          status('👆 Tap to start the camera (permission required).');
+          tapBtn.style.display = 'inline-block';
+          tapBtn.onclick = () => {
+            tapBtn.style.display = 'none';
+            startCamera();
+          };
+          return;
+        }
+
+        // Insecure origin hint
+        if (!window.isSecureContext) {
+          status('❌ Camera blocked: site must be served over HTTPS (or localhost).');
+          return;
+        }
+
         status('❌ Camera error: '+e.message);
         console.error('Camera initialization failed:', e);
       }
@@ -98,7 +138,6 @@
         const caps = track.getCapabilities();
         focusModes = Array.isArray(caps.focusMode) ? caps.focusMode : [];
         if (focusModes.length){
-          // Prefer 'continuous', else 'auto'
           const preferred = focusModes.includes('continuous') ? 'continuous'
                           : focusModes.includes('auto') ? 'auto'
                           : null;
@@ -131,27 +170,27 @@
     function drawFullFrame(){
       const vw = v.videoWidth || f.width;
       const vh = v.videoHeight || f.height;
-      if (f.width !== vw || f.height !== vh) { f.width = vw; f.height = vh; }
+      if (vw && vh && (f.width !== vw || f.height !== vh)) { f.width = vw; f.height = vh; }
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(v, 0, 0, vw, vh);
+      ctx.drawImage(v, 0, 0, f.width, f.height);
     }
 
     function getHash(){
       const w=f.width, h=f.height;
-      const cw = Math.floor(w/GRID), ch = Math.floor(h/GRID);
+      const cw = Math.max(1, Math.floor(w/GRID)), ch = Math.max(1, Math.floor(h/GRID));
       const img = ctx.getImageData(0,0,w,h).data;
       let out = '';
       for(let gy=0; gy<GRID; gy++){
         for(let gx=0; gx<GRID; gx++){
           let sum=0, cnt=0, sy=gy*ch, sx=gx*cw;
-          for(let y=sy; y<sy+ch && y<h; y++){
-            for(let x=sx; x<sx+cw && x<w; x++){
+          for(let y=sy; y<Math.min(sy+ch,h); y++){
+            for(let x=sx; x<Math.min(sx+cw,w); x++){
               const i=(y*w+x)*4;
               sum += (img[i]+img[i+1]+img[i+2])/3;
               cnt++;
             }
           }
-          out += Math.floor((sum/cnt)/32); // 0..7
+          out += Math.floor((sum/Math.max(1,cnt))/32); // 0..7
         }
       }
       return out;
@@ -168,7 +207,6 @@
       const w = f.width, h = f.height;
       const { data } = ctx.getImageData(0, 0, w, h);
 
-      // quick grayscale buffer
       const gray = new Float32Array(w*h);
       for (let y=0, i=0, j=0; y<h; y++){
         for (let x=0; x<w; x++, i+=4, j++){
@@ -176,20 +214,16 @@
         }
       }
 
-      // 4-neighborhood Laplacian: L = -4*c + n+s+e+w
       let sum=0, sumSq=0, count=0;
       for (let y=1; y<h-1; y++){
         for (let x=1; x<w-1; x++){
           const idx = y*w + x;
           const L = -4*gray[idx] + gray[idx-1] + gray[idx+1] + gray[idx-w] + gray[idx+w];
-          sum += L;
-          sumSq += L*L;
-          count++;
+          sum += L; sumSq += L*L; count++;
         }
       }
       const mean = sum / count;
-      const varL = (sumSq / count) - (mean*mean);
-      return varL;
+      return (sumSq / count) - (mean*mean);
     }
 
     // ----- Core loop: detect "scroll stop" from camera -----
@@ -198,7 +232,6 @@
       const h = getHash();
       const d = diffHash(h, lastHash);
 
-      // When motion is "low" for enough frames ⇒ consider it a scroll stop
       if (!busy && d <= MOTION_STOP_DELTA) {
         if (++stableCount >= STABLE_FRAMES) {
           maybeShoot(h);
@@ -229,7 +262,6 @@
         status('📸 Autofocus pulse…');
         await pulseAF();
 
-        // Measure sharpness; if soft, try one refocus pass
         drawFullFrame();
         let sharp = laplacianVariance();
         if (sharp < SHARP_MIN){
@@ -243,7 +275,6 @@
           status(`🟢 Sharp enough (var=${Math.round(sharp)}). Capturing…`);
         }
 
-        // Capture and send lossless full-frame PNG
         const base64 = f.toDataURL('image/png').split(',')[1];
         await fetch('/ask', {
           method:'POST',
@@ -253,7 +284,6 @@
 
         status('✅ Sent. Watching for ≥20% change (2s)…');
 
-        // schedule single retake check in 2s (20% threshold)
         if (retakeTimer) clearTimeout(retakeTimer);
         retakeTimer = setTimeout(checkForRetake, RETAKE_DELAY_MS);
 
