@@ -16,7 +16,7 @@
   <video id="cam" autoplay playsinline muted></video>
   <canvas id="frame" style="display:none"></canvas>
   <div id="status">Initializing camera…</div>
-  <div id="link">Open console → <a href="/console" target="_blank">/console</a></div>
+  <div id="link">Open console → <a href="/console.html" target="_blank">/console.html</a></div>
 
   <script>
     // ----- DOM refs -----
@@ -26,12 +26,14 @@
     const statusEl = document.getElementById('status');
 
     // ----- Tuning (you can tweak) -----
-    const GRID = 8;                 // perceptual hash grid
-    const MOTION_STOP_DELTA = 0.10; // <= 10% change counts as "stable"
-    const STABLE_FRAMES = 4;        // need 4 consecutive stable frames
-    const COOL_DOWN_MS = 2000;      // minimum gap between shots
-    const RETAKE_DELAY_MS = 5000;   // wait 5s for possible new question
-    const RETAKE_DIFF = 0.50;       // >50% change ⇒ retake one more photo
+    const GRID = 8;                   // perceptual hash grid
+    const MOTION_STOP_DELTA = 0.10;   // <= 10% change counts as "stable"
+    const STABLE_FRAMES = 4;          // need 4 consecutive stable frames
+    const COOL_DOWN_MS = 2000;        // minimum gap between shots
+    const RETAKE_DELAY_MS = 2000;     // 2s window to consider retake
+    const RETAKE_DIFF = 0.20;         // >=20% change ⇒ one retake
+    const SHARP_MIN = 200;            // Laplacian variance threshold (tune per device)
+    const AF_PULSE_MS = 150;          // short AF pulse duration
 
     // ----- State -----
     let lastHash = '';
@@ -40,6 +42,10 @@
     let lastShotAt = 0;
     let hashAtShot = null;
     let retakeTimer = null;
+    let stream = null;
+    let track = null;
+    let haveAFSupport = false;
+    let focusModes = [];
 
     // Optional: listen to /events so the console pipeline is clearly alive
     const es = new EventSource('/events');
@@ -48,20 +54,64 @@
     // ----- Camera -----
     async function startCamera(){
       try{
-        const s = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'environment',
+            width: { ideal: 1920 }, height: { ideal: 1080 },
+            // Ask nicely; browsers may ignore unsupported constraints
+            focusMode: 'continuous'
+          },
           audio: false
         });
-        v.srcObject = s;
+        v.srcObject = stream;
         await v.play();
+
+        track = stream.getVideoTracks()[0];
+        await enableContinuousAFIfSupported();
+
         // set canvas to the native camera size (full frame)
         f.width = v.videoWidth || 1280;
         f.height = v.videoHeight || 720;
-        status('✅ Camera ready. I’ll snap when the page stops moving.');
+        status('✅ Camera ready. I'll snap when the page stops moving.');
         loop();
       }catch(e){
         status('❌ Camera error: '+e.message);
       }
+    }
+
+    async function enableContinuousAFIfSupported(){
+      try{
+        if (!track?.getCapabilities) return;
+        const caps = track.getCapabilities();
+        focusModes = Array.isArray(caps.focusMode) ? caps.focusMode : [];
+        if (focusModes.length){
+          // Prefer 'continuous', else 'auto'
+          const preferred = focusModes.includes('continuous') ? 'continuous'
+                          : focusModes.includes('auto') ? 'auto'
+                          : null;
+          if (preferred){
+            await track.applyConstraints({ advanced:[{ focusMode: preferred }] });
+            haveAFSupport = true;
+            status('🔧 Continuous AF enabled.');
+          }
+        }
+      }catch(_){ /* ignore */ }
+    }
+
+    async function pulseAF(){
+      if (!haveAFSupport) return;
+      try{
+        const toSingle = focusModes.includes('single-shot') ? 'single-shot'
+                        : focusModes.includes('auto') ? 'auto'
+                        : null;
+        const backTo = focusModes.includes('continuous') ? 'continuous'
+                        : focusModes.includes('auto') ? 'auto'
+                        : null;
+        if (!toSingle || !backTo) return;
+        await track.applyConstraints({ advanced:[{ focusMode: toSingle }] });
+        await waitMs(AF_PULSE_MS);
+        await track.applyConstraints({ advanced:[{ focusMode: backTo }] });
+      }catch(_){ /* ignore soft failures */ }
     }
 
     // ----- Draw & hash -----
@@ -100,6 +150,35 @@
       return d/a.length;
     }
 
+    // ----- Blur detection: variance of Laplacian -----
+    function laplacianVariance(){
+      const w = f.width, h = f.height;
+      const { data } = ctx.getImageData(0, 0, w, h);
+
+      // quick grayscale buffer
+      const gray = new Float32Array(w*h);
+      for (let y=0, i=0, j=0; y<h; y++){
+        for (let x=0; x<w; x++, i+=4, j++){
+          gray[j] = (data[i] + data[i+1] + data[i+2]) / 3;
+        }
+      }
+
+      // 4-neighborhood Laplacian: L = -4*c + n+s+e+w
+      let sum=0, sumSq=0, count=0;
+      for (let y=1; y<h-1; y++){
+        for (let x=1; x<w-1; x++){
+          const idx = y*w + x;
+          const L = -4*gray[idx] + gray[idx-1] + gray[idx+1] + gray[idx-w] + gray[idx+w];
+          sum += L;
+          sumSq += L*L;
+          count++;
+        }
+      }
+      const mean = sum / count;
+      const varL = (sumSq / count) - (mean*mean);
+      return varL;
+    }
+
     // ----- Core loop: detect "scroll stop" from camera -----
     function loop(){
       drawFullFrame();
@@ -128,39 +207,59 @@
       shoot(currentHash);
     }
 
-    function shoot(currentHash){
+    async function shoot(currentHash){
       busy = true;
       lastShotAt = Date.now();
       hashAtShot = currentHash;
-      status('📸 Capturing…');
 
-      const base64 = f.toDataURL('image/png').split(',')[1]; // full frame, lossless
-      fetch('/ask', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ imageBase64: base64 })
-      }).then(async (r)=>{
-        if(!r.ok) throw new Error('HTTP '+r.status);
-        status('✅ Sent. Watching for change (5s)…');
-        // schedule single retake check in 5s
+      try{
+        status('📸 Autofocus pulse…');
+        await pulseAF();
+
+        // Measure sharpness; if soft, try one refocus pass
+        drawFullFrame();
+        let sharp = laplacianVariance();
+        if (sharp < SHARP_MIN){
+          status(`🔎 Soft image (var=${Math.round(sharp)} < ${SHARP_MIN}). Refocus once…`);
+          await pulseAF();
+          await waitMs(120);
+          drawFullFrame();
+          sharp = laplacianVariance();
+          status(`🔍 Sharpness after refocus: var=${Math.round(sharp)}`);
+        }else{
+          status(`🟢 Sharp enough (var=${Math.round(sharp)}). Capturing…`);
+        }
+
+        // Capture and send lossless full-frame PNG
+        const base64 = f.toDataURL('image/png').split(',')[1];
+        await fetch('/ask', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ imageBase64: base64 })
+        });
+
+        status('✅ Sent. Watching for ≥20% change (2s)…');
+
+        // schedule single retake check in 2s (20% threshold)
         if (retakeTimer) clearTimeout(retakeTimer);
         retakeTimer = setTimeout(checkForRetake, RETAKE_DELAY_MS);
-      }).catch(e=>{
-        status('❌ Send error: '+e.message);
-      }).finally(()=>{
+
+      }catch(e){
+        status('❌ Capture/Send error: '+e.message);
+      }finally{
         busy = false;
-      });
+      }
     }
 
     function checkForRetake(){
       drawFullFrame();
       const newHash = getHash();
       const change = diffHash(newHash, hashAtShot || '');
-      if (change > RETAKE_DIFF) {
-        status(`🔁 Big change detected (${Math.round(change*100)}%). Taking another shot…`);
-        if (cooldownOver()) shoot(newHash); // one more shot
+      if (change >= RETAKE_DIFF) {
+        status(`🔁 Change ${Math.round(change*100)}% ≥ 20%. Taking one retake…`);
+        if (cooldownOver()) shoot(newHash);
       } else {
-        status(`⏹ No major change (${Math.round(change*100)}%). No retake.`);
+        status(`⏹ Change ${Math.round(change*100)}% < 20%. No retake.`);
       }
       hashAtShot = null;
       retakeTimer = null;
@@ -168,6 +267,7 @@
 
     // ----- Helpers -----
     function status(t){ statusEl.textContent = t; }
+    function waitMs(ms){ return new Promise(r=>setTimeout(r, ms)); }
 
     // Start
     startCamera();
