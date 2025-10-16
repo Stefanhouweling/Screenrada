@@ -6,31 +6,29 @@
   <title>Screenrada – Vision AI</title>
   <style>
     :root{--bg:#0b0b0c;--ink:#fff;--muted:#9aa0a6;--panel:#121316;--stroke:#2a2b2f;--brand:#2c7be5;--ok:#0fa77a;--err:#e55353;--warn:#f5a623}
-    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,system-ui,sans-serif}
-    .app{height:100dvh;display:grid;grid-template-rows:1fr 1.15fr}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,system-ui,sans-serif}
+    .app{height:100dvh;display:grid;grid-template-rows:1fr 1.05fr}
     video{width:100%;height:100%;object-fit:cover;background:#000}
     .bottom{padding:10px;display:flex;flex-direction:column;gap:8px}
     .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
     .meta{font-size:12px;opacity:.9}
     .panes{display:grid;grid-template-columns:1fr 1fr;gap:10px}
     .pane{background:var(--panel);border:1px solid var(--stroke);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px}
-    .big{font-weight:800;font-size:28px}.muted{opacity:.9;font-size:12px}
+    .big{font-weight:800;font-size:28px}
+    .muted{opacity:.9;font-size:12px;white-space:pre-wrap}
     .answer{border:1px solid var(--stroke);border-radius:10px;padding:10px;background:#0e0f12;min-height:80px;white-space:pre-wrap}
     .pbar{position:relative;width:200px;height:6px;border-radius:999px;background:#1a1b1f;border:1px solid #2a2b2f;overflow:hidden}
     .pbar>i{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--brand),#6aa6ff);transition:width .15s}
     .err{color:var(--err)}.warn{color:var(--warn)}.ok{color:var(--ok)}
     .speed-indicator{font-size:18px;margin-left:auto}
     .timer{font-weight:700;color:var(--brand)}
-    input[type="range"]{accent-color:var(--brand)}
     @media(max-width:800px){.panes{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
   <div class="app">
-    <section class="top">
-      <video id="cam" autoplay playsinline muted></video>
-    </section>
-
+    <section class="top"><video id="cam" autoplay playsinline muted></video></section>
     <section class="bottom">
       <div class="row meta" style="gap:12px">
         <span id="emoji">💤 Idle</span><span id="hashNote"></span><span id="cooldownNote"></span>
@@ -39,27 +37,22 @@
         <span id="speed" class="speed-indicator">🚦</span>
         <span id="net" style="margin-left:4px">Status: idle</span>
       </div>
-
-      <!-- Zoom controls -->
-      <div class="row meta" style="gap:12px">
-        <span>🔍 Zoom</span>
-        <input id="zoomRange" type="range" min="1" max="10" value="1" step="0.1" style="width:240px">
-        <span id="zoomLabel">1.0×</span>
-        <span class="muted">drag to pan • wheel/pinch to zoom • dbl-click to reset</span>
-        <label style="margin-left:auto" class="meta">
-          <input id="enhanceToggle" type="checkbox" checked>
-          Enhance text (gentle)
-        </label>
-      </div>
-
       <div class="panes">
-        <div class="pane"><div class="muted">Working</div><div id="workingBig" class="answer big">No response</div><div id="workingRat" class="answer muted"></div></div>
-        <div class="pane"><div class="muted">Locked</div><div id="lockedBig" class="answer big">–</div><div id="lockedRat" class="answer muted"></div></div>
+        <div class="pane">
+          <div class="muted">Working</div>
+          <div id="workingBig" class="answer big">No response</div>
+          <div id="workingRat" class="answer muted"></div>
+        </div>
+        <div class="pane">
+          <div class="muted">Locked</div>
+          <div id="lockedBig" class="answer big">–</div>
+          <div id="lockedRat" class="answer muted"></div>
+        </div>
       </div>
     </section>
   </div>
 
-  <!-- analysis canvas (what we send) -->
+  <!-- Hidden canvas used to capture the FULL frame at native resolution -->
   <canvas id="frame" width="640" height="480" style="display:none"></canvas>
 
   <script>
@@ -69,83 +62,21 @@
     const emoji=document.getElementById('emoji'),hashNote=document.getElementById('hashNote'),cooldownNote=document.getElementById('cooldownNote');
     const pfill=document.getElementById('pfill'),ppct=document.getElementById('ppct'),net=document.getElementById('net'),speed=document.getElementById('speed');
     const timer=document.getElementById('timer');
-    const zoomRange=document.getElementById('zoomRange'),zoomLabel=document.getElementById('zoomLabel');
-    const enhanceToggle=document.getElementById('enhanceToggle');
 
-    /* ===== Sensitivity tuning ===== */
+    /* ===== Sensitivity tuning (lowered) ===== */
     const GRID=8;
-    const CHANGE_THRESHOLD=.08;     // frame change to consider "stable"
-    const NEW_Q_THRESHOLD=.12;      // difference from locked to call "new"
+    const CHANGE_THRESHOLD=.08;     // small change counts as “stable”
+    const NEW_Q_THRESHOLD=.12;      // difference from locked to call it “new”
     const STABLE_FRAMES=2;
     const MIN_INTERVAL_MS=2500;
     const SCROLL_DEBOUNCE_MS=180;
     const MUTATION_DEBOUNCE_MS=120;
 
-    /* ===== Zoom / pan ===== */
-    let zoom=1, cx=0.5, cy=0.5; // 1..10, normalized center
-    let panning=false, lastX=0, lastY=0;
-    function clamp(v,min,max){ return Math.max(min,Math.min(max,v)); }
-    function setZoom(z, anchorX=null, anchorY=null){
-      const prev=zoom; zoom=clamp(+z,1,10);
-      zoomRange.value=zoom.toFixed(2); zoomLabel.textContent=zoom.toFixed(1)+'×';
-      if(anchorX!=null && anchorY!=null){
-        // keep anchor stable while zooming
-        const vw=v.videoWidth||1280, vh=v.videoHeight||720;
-        const prevW=vw/prev, prevH=vh/prev, newW=vw/zoom, newH=vh/zoom;
-        const prevSX = cx*vw - prevW/2 + anchorX*prevW;
-        const prevSY = cy*vh - prevH/2 + anchorY*prevH;
-        const newCX = (prevSX - anchorX*newW + newW/2) / vw;
-        const newCY = (prevSY - anchorY*newH + newH/2) / vh;
-        cx=clamp(newCX,0,1); cy=clamp(newCY,0,1);
-      }
-    }
-    zoomRange.addEventListener('input', e => setZoom(e.target.value));
-    v.addEventListener('wheel', e=>{
-      e.preventDefault();
-      const rect=v.getBoundingClientRect();
-      lastX=e.clientX; lastY=e.clientY;
-      const ax=clamp((lastX-rect.left)/rect.width,0,1);
-      const ay=clamp((lastY-rect.top )/rect.height,0,1);
-      const factor = e.deltaY<0 ? 1.1 : 1/1.1;
-      setZoom(zoom*factor, ax, ay);
-    }, { passive:false });
-    v.addEventListener('pointerdown', e=>{ panning=true; v.setPointerCapture(e.pointerId); lastX=e.clientX; lastY=e.clientY; });
-    v.addEventListener('pointermove', e=>{
-      if(!panning || zoom<=1) return;
-      const rect=v.getBoundingClientRect();
-      const dx=(e.clientX-lastX)/rect.width, dy=(e.clientY-lastY)/rect.height;
-      cx=clamp(cx+dx/zoom,0,1); cy=clamp(cy+dy/zoom,0,1);
-      lastX=e.clientX; lastY=e.clientY;
-    });
-    v.addEventListener('pointerup', ()=>panning=false);
-    v.addEventListener('pointercancel', ()=>panning=false);
-    v.addEventListener('dblclick', ()=>{ setZoom(1); cx=0.5; cy=0.5; });
-
-    // Touch pinch
-    let pinchPrev=null;
-    v.addEventListener('touchstart', e=>{
-      if(e.touches.length===2){
-        const [a,b]=e.touches; pinchPrev=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);
-      }
-    },{passive:true});
-    v.addEventListener('touchmove', e=>{
-      if(e.touches.length===2 && pinchPrev){
-        const [a,b]=e.touches; const dist=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);
-        const rect=v.getBoundingClientRect();
-        const ax = clamp(((a.clientX+b.clientX)/2-rect.left)/rect.width,0,1);
-        const ay = clamp(((a.clientY+b.clientY)/2-rect.top )/rect.height,0,1);
-        setZoom(zoom*(dist/pinchPrev), ax, ay);
-        pinchPrev=dist; e.preventDefault();
-      }
-    },{passive:false});
-    v.addEventListener('touchend', ()=>{ pinchPrev=null; },{passive:true});
-
     /* ===== State ===== */
-    let MAX_SEND_WIDTH=832; // adapt down on retry
     let busy=false,lastSent=0,stableCount=0,lastHash='',lockedHash='',lockedAnswer=null;
     let uploadSpeeds=[],restartTimeout=null,requestStartTime=0,queuedCapture=false;
 
-    /* ===== Net indicators ===== */
+    /* ===== Network status ===== */
     function paintNet(){
       const online=navigator.onLine;
       net.textContent=online?'Status: online':'Status: offline';
@@ -157,9 +88,9 @@
     function updateSpeedIndicator(){
       if(!navigator.onLine){speed.textContent='🔴';return}
       const avg=uploadSpeeds.length?uploadSpeeds.reduce((a,b)=>a+b)/uploadSpeeds.length:0;
-      if(avg>400){speed.textContent='🟢';MAX_SEND_WIDTH=896}
-      else if(avg>200){speed.textContent='🟡';MAX_SEND_WIDTH=768}
-      else{speed.textContent='🔴';MAX_SEND_WIDTH=640}
+      if(avg>400){speed.textContent='🟢'}
+      else if(avg>200){speed.textContent='🟡'}
+      else{speed.textContent='🔴'}
     }
 
     function setState(k,extra=''){
@@ -169,26 +100,36 @@
       if(k==='error') restartTimeout=setTimeout(()=>{busy=false;setState('idle')},5000);
     }
 
+    /* ===== Camera ===== */
     async function startCam(){
       try{
-        const s=await navigator.mediaDevices.getUserMedia({ video:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}, audio:false });
+        const s=await navigator.mediaDevices.getUserMedia({
+          video:{ facingMode:'environment', width:{ideal:1920}, height:{ideal:1080} }, audio:false
+        });
         v.srcObject=s; await v.play();
-        f.width=Math.min(v.videoWidth||640,1280);
-        f.height=Math.min(v.videoHeight||480,720);
-        setState('idle'); loop();
-      }catch(e){ alert('Camera permission or HTTPS required'); console.error(e); }
+
+        // Set canvas to native sensor size (no scale)
+        const vw=v.videoWidth||1280, vh=v.videoHeight||720;
+        f.width=vw; f.height=vh;
+
+        setState('idle');
+        loop();
+      }catch(e){
+        alert('Camera permission or HTTPS required');
+        console.error(e);
+      }
     }
     startCam();
 
-    /* ===== Visual hashing ===== */
-    function drawVideoWithZoom(){
-      const vw=v.videoWidth||1280, vh=v.videoHeight||720;
-      const srcW=Math.max(1,vw/zoom), srcH=Math.max(1,vh/zoom);
-      let sx=cx*vw-srcW/2, sy=cy*vh-srcH/2;
-      sx=clamp(sx,0,vw-srcW); sy=clamp(sy,0,vh-srcH);
-      ctx.drawImage(v, sx, sy, srcW, srcH, 0, 0, f.width, f.height);
+    /* ===== Always draw FULL frame (no crop, no filter) ===== */
+    function drawFullFrame(){
+      const vw=v.videoWidth||f.width, vh=v.videoHeight||f.height;
+      if(f.width!==vw || f.height!==vh){ f.width=vw; f.height=vh; }
+      ctx.imageSmoothingEnabled=false;
+      ctx.drawImage(v,0,0,vw,vh);
     }
 
+    /* ===== Perceptual hash for change detection ===== */
     function getHash(){
       const w=f.width,h=f.height,cw=Math.floor(w/GRID),ch=Math.floor(h/GRID);
       const img=ctx.getImageData(0,0,w,h).data; let o='';
@@ -201,57 +142,13 @@
       }
       return o;
     }
-
     function diffHash(a,b){ if(!a||!b||a.length!==b.length) return 1; let d=0; for(let i=0;i<a.length;i++) if(a[i]!==b[i]) d++; return d/a.length; }
+
     const cooldownLeft=()=>Math.max(0,MIN_INTERVAL_MS-(Date.now()-lastSent));
-
-    /* ===== Capture & encode (gentle enhance) ===== */
-    function toBase64PNG(){
-      // Optional gentle enhance to avoid digit morphing
-      if(enhanceToggle.checked){
-        const imgData=ctx.getImageData(0,0,f.width,f.height);
-        const d=imgData.data;
-        // mild contrast
-        for(let i=0;i<d.length;i+=4){
-          let gray=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
-          gray=((gray-128)*1.15)+128; // smaller than before (was 1.3)
-          gray=Math.max(0,Math.min(255,gray));
-          d[i]=d[i+1]=d[i+2]=gray;
-        }
-        // light sharpen (center weight 4.5)
-        const w=f.width,h=f.height;
-        const out=new ImageData(w,h), od=out.data, kd=[0,-1,0,-1,4.5,-1,0,-1,0];
-        for(let y=1;y<h-1;y++){
-          for(let x=1;x<w-1;x++){
-            let sum=0, idx=(y*w+x)*4;
-            // apply only on red channel (gray anyway)
-            sum += d[((y-1)*w+(x  ))*4]*kd[1];
-            sum += d[((y  )*w+(x-1))*4]*kd[3];
-            sum += d[idx]*kd[4];
-            sum += d[((y  )*w+(x+1))*4]*kd[5];
-            sum += d[((y+1)*w+(x  ))*4]*kd[7];
-            sum=Math.max(0,Math.min(255,sum));
-            od[idx]=od[idx+1]=od[idx+2]=sum; od[idx+3]=255;
-          }
-        }
-        // edges passthrough
-        for(let x=0;x<w;x++){ for(const Y of [0,h-1]){ const i=(Y*w+x)*4; od[i]=od[i+1]=od[i+2]=d[i]; od[i+3]=255; } }
-        for(let y=0;y<h;y++){ for(const X of [0,w-1]){ const i=(y*w+X)*4; od[i]=od[i+1]=od[i+2]=d[i]; od[i+3]=255; } }
-        ctx.putImageData(out,0,0);
-      }
-      // downscale for upload budget
-      const sw=f.width, sc=Math.min(1, (MAX_SEND_WIDTH)/sw);
-      const tw=Math.round(f.width*sc), th=Math.round(f.height*sc);
-      const o=document.createElement('canvas'); o.width=tw; o.height=th;
-      const octx=o.getContext('2d'); octx.imageSmoothingEnabled=true; octx.imageSmoothingQuality='high';
-      octx.drawImage(f,0,0,tw,th);
-      return o.toDataURL('image/png',1.0).split(',')[1];
-    }
-
-    function setProgress(p){pfill.style.width=p+'%';ppct.textContent=p+'%';}
+    function setProgress(p){pfill.style.width=p+'%';ppct.textContent=p+'%'}
     function updateTimer(){ if(requestStartTime){ const s=((Date.now()-requestStartTime)/1000).toFixed(1); timer.textContent=s+'s'; if(busy) requestAnimationFrame(updateTimer); } }
 
-    // Scroll / DOM mutation triggers
+    /* ===== Scroll & DOM mutation triggers ===== */
     let scrollTimer=null, mutationTimer=null;
     function queueCapture(){ queuedCapture=true; stableCount=STABLE_FRAMES; }
     ["scroll","wheel","touchmove","keydown"].forEach(evt=>{
@@ -260,8 +157,9 @@
     const mo=new MutationObserver(()=>{ if(mutationTimer) clearTimeout(mutationTimer); mutationTimer=setTimeout(queueCapture, MUTATION_DEBOUNCE_MS); });
     mo.observe(document.documentElement,{subtree:true,childList:true,characterData:true});
 
+    /* ===== Main loop ===== */
     function loop(){
-      drawVideoWithZoom();
+      drawFullFrame();
       const h=getHash(), d=diffHash(h,lastHash);
       hashNote.textContent=`Δ ${Math.round(d*100)}%`;
 
@@ -271,18 +169,22 @@
           cooldownNote.textContent=`⏱ ${Math.ceil(cd/1000)}s`;
         }else{
           cooldownNote.textContent='';
+
           if(queuedCapture){
             queuedCapture=false;
             const changeFromLocked=lockedHash?diffHash(h,lockedHash):1;
             setState(changeFromLocked>NEW_Q_THRESHOLD?'newq':'asking');
             send(h); stableCount=0; lastHash=h; requestAnimationFrame(loop); return;
           }
+
           if(lockedHash && diffHash(h,lockedHash)<NEW_Q_THRESHOLD){
-            setState('nonew','(locked)'); lastHash=h; requestAnimationFrame(loop); return;
+            setState('nonew','(locked)');
+            lastHash=h; requestAnimationFrame(loop); return;
           }
+
           if(d<CHANGE_THRESHOLD){
             if(++stableCount>=STABLE_FRAMES){
-              const isNewQ = lockedHash && diffHash(h,lockedHash)>NEW_Q_THRESHOLD;
+              const isNewQ=lockedHash && diffHash(h,lockedHash)>NEW_Q_THRESHOLD;
               setState(isNewQ?'newq':'asking');
               send(h); stableCount=0;
             }
@@ -295,16 +197,27 @@
       requestAnimationFrame(loop);
     }
 
+    /* ===== Full-frame PNG capture & send ===== */
+    function captureBase64PNG(){
+      // Lossless PNG of the full native frame — same as a manual upload to ChatGPT
+      return f.toDataURL('image/png').split(',')[1];
+    }
+
     async function send(cur,retryCount=0){
       busy=true; lastSent=Date.now(); requestStartTime=Date.now(); setProgress(0); updateTimer();
 
-      // Re-draw before capture to apply current zoom/pan/enhance on this exact frame
-      drawVideoWithZoom();
-      const base=toBase64PNG();
+      // Re-draw to ensure we send this exact frame
+      drawFullFrame();
+      const base=captureBase64PNG();
       const sizeKB=(base.length*0.75)/1024;
 
       try{
-        const response=await fetch('/ask', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ imageBase64: base }) });
+        const response=await fetch('/ask',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({ imageBase64:base })
+        });
+
         const elapsed=(Date.now()-requestStartTime)/1000;
         uploadSpeeds.push(sizeKB/elapsed); if(uploadSpeeds.length>5) uploadSpeeds.shift(); updateSpeedIndicator();
 
@@ -313,8 +226,7 @@
         handle(response.status,text,cur);
       }catch(e){
         if(retryCount<1){
-          console.warn('Retrying with lower resolution…');
-          MAX_SEND_WIDTH=Math.max(512,MAX_SEND_WIDTH-128);
+          console.warn('Retrying upload once…');
           setTimeout(()=>send(cur,retryCount+1),800);
         }else{
           err('Upload failed: '+e.message);
@@ -322,9 +234,12 @@
       }
     }
 
+    /* ===== Error + response handling ===== */
     function err(msg){
       busy=false; requestStartTime=0; timer.textContent='';
-      workingBig.textContent='Error'; workingRat.textContent=msg; setState('error',msg);
+      workingBig.textContent='Error';
+      workingRat.textContent=msg;
+      setState('error',msg);
     }
 
     function handle(status,text,cur){
@@ -350,6 +265,7 @@
       lockedAnswer=display; lockedHash=cur; setProgress(100); setState('nonew');
     }
 
+    /* ===== Safety watchdog ===== */
     setInterval(()=>{ if(v.paused||v.ended){ console.log('Camera frozen, restarting…'); startCam(); } },10000);
   </script>
 </body>
