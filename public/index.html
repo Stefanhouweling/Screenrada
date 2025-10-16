@@ -48,34 +48,47 @@
     let focusModes = [];
 
     // Optional: listen to /events so the console pipeline is clearly alive
-    const es = new EventSource('/events');
-    es.onmessage = () => {}; // no-op; console page will handle display
+    let es;
+    try{
+      es = new EventSource('/events');
+      es.onmessage = () => {}; // no-op; console page will handle display
+      es.onerror = () => {}; // ignore errors
+    }catch(e){
+      console.log('SSE not available:', e);
+    }
 
     // ----- Camera -----
     async function startCamera(){
       try{
+        status('📷 Requesting camera access...');
+        
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: 'environment',
-            width: { ideal: 1920 }, height: { ideal: 1080 },
-            // Ask nicely; browsers may ignore unsupported constraints
-            focusMode: 'continuous'
+            width: { ideal: 1920 }, 
+            height: { ideal: 1080 }
           },
           audio: false
         });
+        
+        status('📷 Camera granted. Setting up...');
         v.srcObject = stream;
         await v.play();
 
         track = stream.getVideoTracks()[0];
-        await enableContinuousAFIfSupported();
-
+        
         // set canvas to the native camera size (full frame)
         f.width = v.videoWidth || 1280;
         f.height = v.videoHeight || 720;
+        
+        status('✅ Camera ready. Checking autofocus...');
+        await enableContinuousAFIfSupported();
+        
         status('✅ Camera ready. I'll snap when the page stops moving.');
         loop();
       }catch(e){
         status('❌ Camera error: '+e.message);
+        console.error('Camera initialization failed:', e);
       }
     }
 
