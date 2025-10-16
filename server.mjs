@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
+import fetch from "node-fetch"; // if on Node < 18, keep; on 18+ you can remove this import
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -11,81 +12,86 @@ app.use(express.json({ limit: "20mb" }));
 const PORT = process.env.PORT || 10000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// SSE clients for console
+if (!OPENAI_API_KEY) {
+  console.warn("⚠️  OPENAI_API_KEY missing. Set it in your env.");
+}
+
+// SSE clients for console (optional console UI you had)
 let consoleClients = [];
 
-// --- proxy endpoint with retry logic ---
+/** POST /ask — proxy to OpenAI with strict JSON + re-read fallback */
 app.post("/ask", async (req, res) => {
   try {
     const { imageBase64 } = req.body || {};
     if (!imageBase64) return res.status(400).json({ error: "Missing imageBase64" });
 
-    const r = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o",
-        temperature: 0,
-        max_tokens: 200,
-        messages: [
-          {
-            role: "system",
-            content: `You are a math problem solver. Read the question carefully and solve it step-by-step.
+    const body = {
+      model: "gpt-4o",
+      temperature: 0,
+      max_tokens: 400,
+      messages: [
+        {
+          role: "system",
+          content: `You are a math problem solver for MULTIPLE-CHOICE questions shown in an IMAGE.
 
-Instructions:
-1) Extract the question text AND all multiple choice options
-2) Identify what the question is asking for (keywords: "more", "less", "difference", "solve for")
-3) Solve the problem step-by-step mathematically
-4) CRITICAL: Check if your answer matches any of the multiple choice options
-5) If no exact match, convert your answer to match the format of the options:
-   - Convert fractions to different denominators (e.g., 1 6/7 = 1 42/49)
-   - Convert decimals to fractions or vice versa
-   - Simplify or expand as needed
-6) Return the answer in the format that matches the options
+Protocol:
+1) OCR carefully: extract the question text AND every option letter+text (A–D etc).
+2) Identify what is being asked.
+3) Compute the answer step-by-step with precise arithmetic (currency to two decimals).
+4) MATCHING:
+   - Try exact match to one option (normalize spaces, commas, currency symbols).
+   - If no exact match: RE-READ the NUMBERS from the image and RE-CALCULATE once.
+     Prefer numbers near currency symbols ($) and those within the options block.
+     Consider common OCR slips (6↔5, 8↔3, 0↔6, 1.00↔1.0, .50↔0.50).
+   - If still no match, convert your result into the options’ format (mixed numbers, fractions, decimals).
+5) Only if there is truly no match after re-read and conversions, set matched_option=null.
 
-Return STRICT JSON:
+Return STRICT JSON ONLY:
 {
- "question": "extracted question text",
+ "question": "...",
  "options": ["A. ...", "B. ...", "C. ...", "D. ..."],
- "calculated_answer": "your calculated result",
- "answer": "final answer matching option format",
- "matched_option": "letter of matching option (A/B/C/D) or null",
- "work": "step-by-step calculation including conversion if needed"
-}
+ "calculated_answer": "...",
+ "answer": "...",
+ "matched_option": "A"|"B"|"C"|"D"|null,
+ "work": "concise steps, include any number corrections/conversions"
+}`
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Solve and match to an option. Show concise steps." },
+            { type: "image_url", image_url: { url: `data:image/png;base64,${imageBase64}` } }
+          ]
+        }
+      ],
+      response_format: { type: "json_object" }
+    };
 
-CRITICAL: 
-- Always extract the multiple choice options
-- Solve the problem first, then check options
-- If your answer doesn't match, try converting:
-  * 1 6/7 with denominator 7 → multiply by 7/7 → 1 42/49
-  * 0.5 → 1/2 or 2/4 depending on options
-  * -2 → look for -2 in options
-- Return answer in the EXACT format shown in options
-- If no match after conversion, return calculated_answer with matched_option: null`
-          },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "Read the question, extract ALL multiple choice options, solve it, then match your answer to the options. Show your work including any conversions needed." },
-              { type: "image_url", image_url: { url: `data:image/png;base64,${imageBase64}` } }
-            ]
-          }
-        ],
-        response_format: { type: "json_object" }
-      })
-    });
+    // Basic retry on transient upstream errors
+    const doFetch = async (attempt = 0) => {
+      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify(body),
+      });
+      if ((r.status === 502 || r.status === 503 || r.status === 504) && attempt < 2) {
+        await new Promise(r => setTimeout(r, 400 + attempt * 600));
+        return doFetch(attempt + 1);
+      }
+      return r;
+    };
 
+    const r = await doFetch();
     const text = await r.text();
-    
-    // Broadcast to console clients
+
     const statusEmoji = r.ok ? "🟢" : "🔴";
     consoleClients.forEach(client => {
       client.write(`data: ${JSON.stringify({ type: 'answer', internet: statusEmoji, payload: text })}\n\n`);
     });
-    
+
     res.status(r.status).type("application/json").send(text);
   } catch (e) {
     consoleClients.forEach(client => {
@@ -95,22 +101,20 @@ CRITICAL:
   }
 });
 
-// SSE endpoint for console
+/** SSE endpoint (optional console) */
 app.get("/events", (req, res) => {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     "Connection": "keep-alive"
   });
-  
   consoleClients.push(res);
-  
   req.on("close", () => {
     consoleClients = consoleClients.filter(c => c !== res);
   });
 });
 
-// static UI
+/** Static UI */
 app.use(express.static(path.join(__dirname, "public")));
 
 app.listen(PORT, () => {
