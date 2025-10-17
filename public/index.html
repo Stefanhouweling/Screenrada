@@ -67,91 +67,66 @@
 
   <script>
     // ----- DOM refs -----
-    const v = document.getElementById('screen');
-    const f = document.getElementById('frame');
-    let ctx;
-    try { ctx = f.getContext('2d', { willReadFrequently: true }); if(!ctx) throw 0; }
-    catch { ctx = f.getContext('2d'); }
+    const v=document.getElementById('screen');
+    const f=document.getElementById('frame');
+    let ctx; try{ ctx=f.getContext('2d',{willReadFrequently:true}); if(!ctx) throw 0; }catch{ ctx=f.getContext('2d'); }
+    const statusEl=document.getElementById('status');
+    const startBtn=document.getElementById('start');
+    const answerWrap=document.getElementById('answerWrap');
+    const javaOut=document.getElementById('javaOut');
+    const lastTime=document.getElementById('lastTime');
+    const ovInput=document.getElementById('ovInput');
+    const setOverrideBtn=document.getElementById('setOverride');
+    const clearOverrideBtn=document.getElementById('clearOverride');
 
-    const statusEl = document.getElementById('status');
-    const startBtn = document.getElementById('start');
-    const answerWrap = document.getElementById('answerWrap');
-    const javaOut = document.getElementById('javaOut');
-    const lastTime = document.getElementById('lastTime');
+    // Tuning
+    const GRID=8, MOTION_STOP_DELTA=0.10, STABLE_FRAMES=4, COOL_DOWN_MS=2000, RETAKE_DELAY_MS=2000, RETAKE_DIFF=0.20, SHARP_MIN=200;
 
-    const ovInput = document.getElementById('ovInput');
-    const setOverrideBtn = document.getElementById('setOverride');
-    const clearOverrideBtn = document.getElementById('clearOverride');
+    // State
+    let lastHash='', stableCount=0, busy=false, lastShotAt=0, hashAtShot=null, retakeTimer=null, stream=null, track=null;
+    let lastAnswerText='', lastJavaText='', overrideText='';
 
-    // ----- Tuning -----
-    const GRID = 8;
-    const MOTION_STOP_DELTA = 0.10;
-    const STABLE_FRAMES = 4;
-    const COOL_DOWN_MS = 2000;
-    const RETAKE_DELAY_MS = 2000;
-    const RETAKE_DIFF = 0.20;
-    const SHARP_MIN = 200;
-
-    // ----- State -----
-    let lastHash = '';
-    let stableCount = 0;
-    let busy = false;
-    let lastShotAt = 0;
-    let hashAtShot = null;
-    let retakeTimer = null;
-    let stream = null;
-    let track = null;
-
-    let lastAnswerText = '';
-    let lastJavaText   = '';
-    let overrideText   = '';
-
-    // Render once so Override can show before first AI response
+    // Render once
     renderConsole();
 
-    // ----- Start video -----
-    startBtn.onclick = startVideoCapture;
+    // Log helper -> console viewer
+    async function logConsole(event, meta){
+      try{ await fetch('/log',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({event, meta})}); }
+      catch(e){}
+    }
 
+    // Start video
+    startBtn.onclick=startVideoCapture;
     async function startVideoCapture(){
       try{
         status('📹 Requesting video capture device access…');
-        if (!navigator.mediaDevices?.getUserMedia) throw new Error('getUserMedia not supported. Use Chrome/Edge or localhost/HTTPS.');
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        if (!devices.some(d => d.kind === 'videoinput')) throw new Error('No video devices found.');
-        const constraints = { video: { width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30} }, audio:false };
+        if(!navigator.mediaDevices?.getUserMedia) throw new Error('getUserMedia not supported. Use Chrome/Edge or HTTPS/localhost.');
+        const devices=await navigator.mediaDevices.enumerateDevices();
+        if(!devices.some(d=>d.kind==='videoinput')) throw new Error('No video devices found.');
+        const constraints={ video:{ width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30} }, audio:false };
         status('📹 Browser asking for camera permission…');
-        stream = await navigator.mediaDevices.getUserMedia(constraints);
-        track = stream.getVideoTracks()[0];
-        v.srcObject = stream;
-        startBtn.style.display = 'none';
+        stream=await navigator.mediaDevices.getUserMedia(constraints);
+        track=stream.getVideoTracks()[0];
+        v.srcObject=stream; startBtn.style.display='none';
         status('📹 Video loading…'); await v.play().catch(()=>{});
-        track.addEventListener('ended', () => { status('🛑 Video ended.'); startBtn.style.display='inline-block'; cancelRetake(); busy=false; });
+        track.addEventListener('ended',()=>{ status('🛑 Video ended.'); startBtn.style.display='inline-block'; cancelRetake(); busy=false; });
         status('⏳ Waiting for video dimensions…'); await waitForDims(v);
-        setCanvasSizeToVideo();
-        status('✅ Ready. I will snap when the content stops changing.');
+        setCanvasSizeToVideo(); status('✅ Ready. I will snap when the content stops changing.');
         loop();
-      }catch(e){ status('❌ Video capture error: ' + (e.message || e)); }
+      }catch(e){ status('❌ Video capture error: ' + (e.message||e)); }
     }
 
-    function setCanvasSizeToVideo(){
-      const dpr = Math.max(1, window.devicePixelRatio || 1);
-      f.width  = Math.floor(v.videoWidth  * dpr);
-      f.height = Math.floor(v.videoHeight * dpr);
-    }
-    async function waitForDims(videoEl){
-      for (let i=0;i<40;i++){ if (videoEl.videoWidth && videoEl.videoHeight) return; await waitMs(50); }
-    }
+    function setCanvasSizeToVideo(){ const dpr=Math.max(1,window.devicePixelRatio||1); f.width=Math.floor(v.videoWidth*dpr); f.height=Math.floor(v.videoHeight*dpr); }
+    async function waitForDims(videoEl){ for(let i=0;i<40;i++){ if(videoEl.videoWidth&&videoEl.videoHeight) return; await waitMs(50);} }
 
-    // ----- Frame ops -----
+    // Frame ops
     function drawFullFrame(){ ctx.imageSmoothingEnabled=false; ctx.drawImage(v,0,0,f.width,f.height); }
     function getHash(){
       const w=f.width,h=f.height,cw=Math.max(1,Math.floor(w/GRID)),ch=Math.max(1,Math.floor(h/GRID));
       const img=ctx.getImageData(0,0,w,h).data; let out='';
       for(let gy=0;gy<GRID;gy++) for(let gx=0;gx<GRID;gx++){
         let sum=0,cnt=0,sy=gy*ch,sx=gx*cw;
-        for(let y=sy;y<Math.min(sy+ch,h);y++) for(let x=sx;x<Math.min(sx+cw,w);x++){
-          const i=(y*w+x)*4; sum+=(img[i]+img[i+1]+img[i+2])/3; cnt++;
-        }
+        for(let y=sy;y<Math.min(sy+ch,h);y++) for(let x=sx;x<Math.min(sx+cw,w);x++){ const i=(y*w+x)*4; sum+=(img[i]+img[i+1]+img[i+2])/3; cnt++; }
         out += Math.floor((sum/Math.max(1,cnt))/32);
       }
       return out;
@@ -161,23 +136,25 @@
       const w=f.width,h=f.height, id=ctx.getImageData(0,0,w,h), data=id.data, gray=new Float32Array(w*h);
       for(let y=0,i=0,j=0;y<h;y++){ for(let x=0;x<w;x++,i+=4,j++){ gray[j]=(data[i]+data[i+1]+data[i+2])/3; } }
       let sum=0,sumSq=0,count=0;
-      for(let y=1;y<h-1;y++) for(let x=1;x<w-1;x++){
-        const idx=y*w+x, L=-4*gray[idx]+gray[idx-1]+gray[idx+1]+gray[idx-w]+gray[idx+w];
-        sum+=L; sumSq+=L*L; count++;
-      }
+      for(let y=1;y<h-1;y++) for(let x=1;x<w-1;x++){ const idx=y*w+x, L=-4*gray[idx]+gray[idx-1]+gray[idx+1]+gray[idx-w]+gray[idx+w]; sum+=L; sumSq+=L*L; count++; }
       const mean=sum/count; return (sumSq/count)-(mean*mean);
     }
 
-    // ----- Main loop -----
+    // Main loop
     function loop(){
       drawFullFrame();
       const h=getHash(), d=diffHash(h,lastHash);
-      if(!busy && d<=MOTION_STOP_DELTA){ if(++stableCount>=STABLE_FRAMES){ maybeShoot(h); stableCount=0; } }
-      else { stableCount=0; }
+      if(!busy && d<=MOTION_STOP_DELTA){
+        if(++stableCount>=STABLE_FRAMES){ maybeShoot(h); stableCount=0; }
+      }else{
+        const changePct = Math.round(d*100);
+        if(changePct >= Math.round(RETAKE_DIFF*100)) logConsole('change_detected', { percent: changePct });
+        stableCount=0;
+      }
       lastHash=h;
       requestAnimationFrame(loop);
     }
-    const cooldownOver = ()=> (Date.now()-lastShotAt)>=COOL_DOWN_MS;
+    const cooldownOver=()=> (Date.now()-lastShotAt)>=COOL_DOWN_MS;
     function maybeShoot(h){ if(!cooldownOver()) return; shoot(h); }
 
     async function shoot(currentHash){
@@ -186,122 +163,89 @@
         drawFullFrame();
         let sharp=laplacianVariance();
         if(sharp<SHARP_MIN){ status('🔎 Soft frame (var='+Math.round(sharp)+'). Re-draw…'); await waitMs(100); drawFullFrame(); }
-        else { status('🟢 Stable & sharp. Capturing…'); }
+        await logConsole('photo_captured', {}); status('🟢 Stable & sharp. Capturing…');
 
-        const dataUrl = f.toDataURL('image/png');
-        const base64  = dataUrl.split(',')[1];
+        const dataUrl=f.toDataURL('image/png');
+        const base64=dataUrl.split(',')[1];
 
-        status('📤 Sending image to AI…');
+        await logConsole('sending_to_ai', {});
+        const t0=performance.now();
 
         let resp;
-        try {
-          resp = await fetch('/ask', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
+        try{
+          resp=await fetch('/ask',{ method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
             body: JSON.stringify({
               imageBase64: base64,
-              // REQUIRED by your server (but NOT multiple-choice): single direct-answer prompt
-              questions: [
-                "Give the direct answer from the image. Output only the answer text or number. No labels, no explanation."
-              ]
+              questions: ["Give the direct answer from the image. Output only the answer text or number. No labels, no explanation."]
             })
           });
-        } catch (netErr) {
+        }catch(netErr){
           status('❌ Network error calling /ask');
-          lastAnswerText = '(network error)';
-          lastJavaText   = '// could not reach /ask';
-          renderConsole();
-          console.error(netErr);
-          return;
+          lastAnswerText='(network error)'; lastJavaText='// could not reach /ask'; renderConsole(); return;
         }
+
+        const ms=Math.max(1, Math.round(performance.now()-t0));
+        const speed = ms < 1200 ? 'fast' : (ms < 3000 ? 'medium' : 'slow');
+        await logConsole('internet_speed', { ms, speed });
 
         if(!resp.ok){
-          const errText = await resp.text().catch(()=> '');
+          const errText=await resp.text().catch(()=> '');
           status('❌ Server error ' + resp.status);
-          lastAnswerText = '(server ' + resp.status + ')';
-          lastJavaText   = (errText && errText.trim())
-            ? '// /ask error:\n' + errText.trim()
-            : '// /ask returned ' + resp.status + ' ' + resp.statusText;
-          renderConsole();
-          console.error('Server error from /ask:', errText || resp.statusText);
-          return;
+          lastAnswerText='(server '+resp.status+')';
+          lastJavaText=(errText && errText.trim()) ? ('// /ask error:\n'+errText.trim()) : ('// /ask returned '+resp.status+' '+resp.statusText);
+          renderConsole(); return;
         }
 
-        const data = await resp.json();
-        const answer = (data?.answers?.[0]?.answer ?? '').toString().trim();
-
-        // Fallback "java" area doubles as diagnostics area
-        const javaFallback =
-`// Direct click example (adjust for your DOM) — not matching choices
-String answer = "${answer.replace(/"/g,'\\"')}";
-System.out.println("AI answer: " + answer);`;
+        const data=await resp.json();
+        const answer=(data?.answers?.[0]?.answer ?? '').toString().trim();
 
         lastAnswerText = answer || '(no answer returned)';
-        lastJavaText   = javaFallback;
+        lastJavaText   = `// info\nString answer = "${(answer||'').replace(/"/g,'\\"')}";\nSystem.out.println("AI answer: " + answer);`;
         renderConsole();
-
-        console.log('[AI ANSWER]', lastAnswerText);
-        console.log('[INFO] Response object:', data);
 
         status('✅ Sent. Watching for ≥20% change (2s)…');
         cancelRetake(); retakeTimer=setTimeout(checkForRetake, RETAKE_DELAY_MS);
       }catch(e){
         status('❌ Capture/Send error: ' + (e.message||e));
-        lastAnswerText = '(client error)';
-        lastJavaText   = '// ' + (e.message || e);
-        renderConsole();
-        console.error(e);
-      }finally{
-        busy=false;
-      }
-    }
-
-    function renderConsole(){
-      answerWrap.innerHTML = '';
-
-      const big = document.createElement('div');
-      big.className = 'answerBig';
-      big.textContent = lastAnswerText || '(no answer)';
-      answerWrap.appendChild(big);
-
-      if(overrideText){
-        const lab = document.createElement('div');
-        lab.className = 'overrideLabel';
-        lab.textContent = 'Override:';
-        answerWrap.appendChild(lab);
-
-        const over = document.createElement('div');
-        over.className = 'overrideLine';
-        over.textContent = overrideText;
-        answerWrap.appendChild(over);
-      }
-
-      javaOut.textContent = lastJavaText || '// (no java provided)';
-      lastTime.textContent = new Date().toLocaleTimeString();
+        lastAnswerText='(client error)'; lastJavaText='// '+(e.message||e); renderConsole();
+      }finally{ busy=false; }
     }
 
     function checkForRetake(){
       drawFullFrame();
       const newHash=getHash();
       const change=diffHash(newHash, hashAtShot||'');
-      if(change>=RETAKE_DIFF){ status('🔁 Change '+Math.round(change*100)+'% ≥ 20%. Retake…'); if(cooldownOver()) shoot(newHash); }
-      else { status('⏹ Change '+Math.round(change*100)+'% < 20%. No retake.'); }
+      const changePct=Math.round(change*100);
+      if(change>=RETAKE_DIFF){ logConsole('change_detected',{percent:changePct}); if(cooldownOver()) shoot(newHash); }
       hashAtShot=null; cancelRetake();
     }
+
     function cancelRetake(){ if(retakeTimer){ clearTimeout(retakeTimer); retakeTimer=null; } }
     function waitMs(ms){ return new Promise(r=>setTimeout(r,ms)); }
     function status(t){ statusEl.textContent=t; }
 
-    // ----- Override controls -----
+    // Override -> also broadcast to console
     function setOverride(text){
-      overrideText = (text||'').trim();
+      overrideText=(text||'').trim();
       renderConsole();
-      if(overrideText) console.log('[OVERRIDE]', overrideText);
+      fetch('/log',{method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(overrideText ? { event:'override_set', meta:{ text: overrideText } }
+                                          : { event:'override_clear', meta:{} })}).catch(()=>{});
     }
-    setOverrideBtn.addEventListener('click', () => setOverride(ovInput.value));
-    clearOverrideBtn.addEventListener('click', () => { ovInput.value=''; setOverride(''); });
-    ovInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ setOverride(ovInput.value); } });
+    setOverrideBtn.addEventListener('click',()=>setOverride(ovInput.value));
+    clearOverrideBtn.addEventListener('click',()=>{ ovInput.value=''; setOverride(''); });
+    ovInput.addEventListener('keydown',(e)=>{ if(e.key==='Enter'){ setOverride(ovInput.value); } });
+
+    function renderConsole(){
+      answerWrap.innerHTML='';
+      const big=document.createElement('div'); big.className='answerBig'; big.textContent=lastAnswerText||'(no answer)'; answerWrap.appendChild(big);
+      if(overrideText){
+        const lab=document.createElement('div'); lab.className='overrideLabel'; lab.textContent='Override:'; answerWrap.appendChild(lab);
+        const over=document.createElement('div'); over.className='overrideLine'; over.textContent=overrideText; answerWrap.appendChild(over);
+      }
+      javaOut.textContent=lastJavaText||'// (no java provided)';
+      lastTime.textContent=new Date().toLocaleTimeString();
+    }
   </script>
 </body>
 </html>
