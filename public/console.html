@@ -74,43 +74,43 @@
       autoFit();
     }
 
-    // Extract from model content (JSON or raw)
-    function extractDisplayFromContent(content){
-      if(typeof content === 'string'){
-        let parsed;
-        try { parsed = JSON.parse(content); } catch {
-          const m = content.match(/^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$/i);
-          if(m){ try { parsed = JSON.parse(m[1]); } catch {} }
-        }
-        if(parsed){
-          const fromArray = parsed?.answers?.[0]?.answer;
-          if(typeof fromArray === 'string') return fromArray;
-          if(typeof parsed.answer === 'string') return parsed.answer;
-          if(typeof parsed.result_number !== 'undefined') return String(parsed.result_number);
-        }
-        return content;
+    function extractNumberedListFromJSON(content){
+      let parsed;
+      try { parsed = JSON.parse(content); } catch {
+        const m = content.match(/^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$/i);
+        if(m){ try { parsed = JSON.parse(m[1]); } catch {} }
       }
-      try { return JSON.stringify(content); } catch { return 'Unparseable content'; }
+      if(parsed){
+        if(Array.isArray(parsed.answers)){
+          const items = parsed.answers
+            .map((a,i)=>({ n: Number.isFinite(+a.number)?+a.number:(i+1), t: (a?.answer??'').toString().trim() }))
+            .filter(x=>x.t)
+            .sort((a,b)=>a.n-b.n);
+          if(items.length) return items.map(x=>`${x.n}. ${x.t}`).join('  ');
+        }
+        if(typeof parsed.answer==='string') return parsed.answer;
+      }
+      // Try plain text "1. foo" lines
+      const m2 = [...content.matchAll(/^\s*(\d+)\.\s*(.+)$/gm)].map(x=>`${x[1]}. ${x[2].trim()}`);
+      if(m2.length) return m2.join('  ');
+      return content;
     }
 
-    // Auto-fit Answer + Override inside #display
+    // Auto-fit text inside #display
     function autoFit(){
-      fitText(answerEl, 140, 24);   // max ~140px, min 24px
-      fitText(overrideEl, 80, 18);  // override slightly smaller
+      fitText(answerEl, 140, 24);
+      fitText(overrideEl, 80, 18);
     }
     function fitText(el, maxPx, minPx){
       if(!el || el.style.display==='none') return;
       let size = maxPx;
       const pad = 8;
       el.style.fontSize = size + 'px';
-      // Iteratively shrink until it fits within the display box
       const boxW = display.clientWidth - pad*2;
       const boxH = display.clientHeight - pad*2;
-      // allow several passes (avoid infinite loops)
       for(let i=0;i<60;i++){
-        const { scrollWidth, scrollHeight, clientWidth, clientHeight } = el;
-        const tooWide  = scrollWidth  > boxW || clientWidth  > boxW;
-        const tooTall  = scrollHeight > boxH || clientHeight > boxH;
+        const tooWide  = el.scrollWidth  > boxW;
+        const tooTall  = el.scrollHeight > boxH;
         if(!(tooWide || tooTall)) break;
         size = Math.max(minPx, size - 2);
         el.style.fontSize = size + 'px';
@@ -127,6 +127,7 @@
         try{
           const data = JSON.parse(msg.data);
 
+          // Status / override logs
           if(data.type === 'log'){
             if(data.event === 'change_detected'){
               const pct = data.meta?.percent ?? '?';
@@ -147,15 +148,16 @@
             return;
           }
 
+          // OpenAI payload → numbered answers
           if(data.type === 'answer'){
             const payload = data.payload;
             if(payload?.error){
-              setAnswer('OpenAI error', '#ff4d4f');
+              setAnswer(payload.error?.message || 'OpenAI error', '#ff4d4f');
               return;
             }
             const content = payload?.choices?.[0]?.message?.content;
             if(!content){ setAnswer('No Content', '#ff4d4f'); return; }
-            const text = extractDisplayFromContent(content);
+            const text = extractNumberedListFromJSON(content);
             setAnswer(text, '#fff');
           }
         }catch(err){
