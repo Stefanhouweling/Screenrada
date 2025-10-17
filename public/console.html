@@ -5,95 +5,119 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>AI Console Display</title>
   <style>
+    html,body{ height:100%; }
     body{
       margin:0;background:#000;color:#fff;font-family:-apple-system,system-ui,sans-serif;
       display:flex;flex-direction:column;align-items:center;justify-content:center;
-      height:100vh;text-align:center;padding:20px;
+      text-align:center;padding:20px; gap:20px;
     }
-    #status{
-      font-size:32px;margin-bottom:30px;opacity:.9;display:flex;align-items:center;gap:15px;
+    #status{ font-size:28px;opacity:.9;display:flex;flex-direction:column;gap:8px;align-items:center; }
+    .chip{ background:#111;border:1px solid #333;border-radius:999px;padding:.25rem .8rem;font-size:18px }
+    .speed{ font-weight:800 }
+    .speed.fast{ color:#18c964 }     /* green */
+    .speed.medium{ color:#ff9800 }   /* orange */
+    .speed.slow{ color:#ff4d4f }     /* red */
+
+    #display{
+      max-width:90vw; max-height:65vh; display:flex; flex-direction:column;
+      align-items:center; justify-content:center; gap:14px;
     }
-    #emoji{font-size:48px}
-    #answer{
-      font-size:120px;font-weight:900;margin-bottom:30px;line-height:1.1;
-      text-shadow:0 0 40px rgba(44,123,229,.3);
-    }
-    #rationale{font-size:28px;opacity:.7;max-width:800px;line-height:1.4}
-    #speed{font-size:36px;margin-left:10px}
-    .pulse{animation:pulse 2s ease-in-out infinite}
-    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
-    @media(max-width:800px){
-      #answer{font-size:72px}
-      #rationale{font-size:20px}
-      #status{font-size:24px}
-    }
+    #answer{ font-weight:900; line-height:1.06; text-shadow:0 0 40px rgba(44,123,229,.3); }
+    #overrideLabel{ font-size:16px; letter-spacing:.08em; opacity:.9; text-transform:uppercase; display:none; }
+    #override{ font-weight:800; line-height:1.06; color:#ffd166; display:none; }
+
+    .pulse{ animation:pulse 2s ease-in-out infinite; }
+    @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:.6} }
   </style>
 </head>
 <body>
   <div id="status">
-    <span id="emoji">💤</span>
-    <span id="statusText">Idle</span>
-    <span id="speed">🚦</span>
+    <div id="line1" class="chip">Idle</div>
+    <div id="line2" class="chip">—</div>
+    <div id="line3" class="chip">—</div>
   </div>
-  <div id="answer">Waiting...</div>
-  <div id="rationale"></div>
+
+  <div id="display" aria-live="polite">
+    <div id="answer">Waiting…</div>
+    <div id="overrideLabel">Override:</div>
+    <div id="override"></div>
+  </div>
 
   <script>
-    const emoji = document.getElementById('emoji');
-    const statusText = document.getElementById('statusText');
-    const answerEl = document.getElementById('answer');
-    const rationaleEl = document.getElementById('rationale');
-    const speed = document.getElementById('speed');
-
-    const statusMap = {
-      '🟢':'Question detected',
-      '🟡':'New question',
-      '🔵':'Stable',
-      '🔴':'Error',
-      '💤':'Idle'
-    };
+    const line1=document.getElementById('line1');
+    const line2=document.getElementById('line2');
+    const line3=document.getElementById('line3');
+    const display=document.getElementById('display');
+    const answerEl=document.getElementById('answer');
+    const overrideLabel=document.getElementById('overrideLabel');
+    const overrideEl=document.getElementById('override');
 
     function setAnswer(text, color){
-      answerEl.innerHTML = text || 'No answer';
+      answerEl.textContent = text || 'No answer';
       answerEl.classList.add('pulse');
       setTimeout(()=>answerEl.classList.remove('pulse'), 2000);
       answerEl.style.color = color || '#fff';
+      autoFit();
     }
 
-    function renderMath(){
-      if(window.MathJax && MathJax.typesetPromise){
-        MathJax.typesetPromise();
+    function setOverride(text){
+      const t=(text||'').trim();
+      if(t){
+        overrideLabel.style.display='block';
+        overrideEl.style.display='block';
+        overrideEl.textContent=t;
+      }else{
+        overrideLabel.style.display='none';
+        overrideEl.style.display='none';
+        overrideEl.textContent='';
       }
+      autoFit();
     }
 
+    // Extract from model content (JSON or raw)
     function extractDisplayFromContent(content){
-      // Try JSON first (model should return JSON per your server prompt)
       if(typeof content === 'string'){
         let parsed;
-        try { parsed = JSON.parse(content); }
-        catch{
-          // Try stripping code fences
+        try { parsed = JSON.parse(content); } catch {
           const m = content.match(/^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$/i);
-          if(m){
-            try { parsed = JSON.parse(m[1]); } catch {}
-          }
+          if(m){ try { parsed = JSON.parse(m[1]); } catch {} }
         }
         if(parsed){
-          // Prefer the spec: { answers: [{ answer: "..." }]}
           const fromArray = parsed?.answers?.[0]?.answer;
-          if(typeof fromArray === 'string') return { text: fromArray, rationale: '' };
-
-          // Fallbacks sometimes used
-          if(typeof parsed.answer === 'string') return { text: parsed.answer, rationale: parsed.work || '' };
-          if(typeof parsed.result_number !== 'undefined') return { text: String(parsed.result_number), rationale: parsed.work || '' };
+          if(typeof fromArray === 'string') return fromArray;
+          if(typeof parsed.answer === 'string') return parsed.answer;
+          if(typeof parsed.result_number !== 'undefined') return String(parsed.result_number);
         }
-        // Not JSON → show raw string
-        return { text: content, rationale: '' };
+        return content;
       }
-      // Not a string (unexpected) → stringify
-      try { return { text: JSON.stringify(content), rationale: '' }; }
-      catch { return { text: 'Unparseable content', rationale: '' }; }
+      try { return JSON.stringify(content); } catch { return 'Unparseable content'; }
     }
+
+    // Auto-fit Answer + Override inside #display
+    function autoFit(){
+      fitText(answerEl, 140, 24);   // max ~140px, min 24px
+      fitText(overrideEl, 80, 18);  // override slightly smaller
+    }
+    function fitText(el, maxPx, minPx){
+      if(!el || el.style.display==='none') return;
+      let size = maxPx;
+      const pad = 8;
+      el.style.fontSize = size + 'px';
+      // Iteratively shrink until it fits within the display box
+      const boxW = display.clientWidth - pad*2;
+      const boxH = display.clientHeight - pad*2;
+      // allow several passes (avoid infinite loops)
+      for(let i=0;i<60;i++){
+        const { scrollWidth, scrollHeight, clientWidth, clientHeight } = el;
+        const tooWide  = scrollWidth  > boxW || clientWidth  > boxW;
+        const tooTall  = scrollHeight > boxH || clientHeight > boxH;
+        if(!(tooWide || tooTall)) break;
+        size = Math.max(minPx, size - 2);
+        el.style.fontSize = size + 'px';
+        if(size === minPx) break;
+      }
+    }
+    window.addEventListener('resize', autoFit);
 
     let es;
     function connect(){
@@ -103,60 +127,51 @@
         try{
           const data = JSON.parse(msg.data);
 
-          if(data.type === 'answer'){
-            const statusEmoji = data.internet || '💤';
-            emoji.textContent = statusEmoji;
-            statusText.textContent = statusMap[statusEmoji] || 'Unknown';
-            speed.textContent = statusEmoji;
-
-            // payload is already an OBJECT (the OpenAI API JSON). Do NOT JSON.parse it.
-            const payload = data.payload;
-
-            // Handle OpenAI error objects
-            if(payload?.error){
-              setAnswer('OpenAI error', '#e55353');
-              rationaleEl.textContent = payload.error?.message || JSON.stringify(payload.error);
-              return renderMath();
+          if(data.type === 'log'){
+            if(data.event === 'change_detected'){
+              const pct = data.meta?.percent ?? '?';
+              line1.textContent = `Change detected (${pct}%)`;
+            } else if(data.event === 'photo_captured'){
+              line2.textContent = 'Photo captured';
+            } else if(data.event === 'sending_to_ai'){
+              line2.textContent = 'Sent to AI…';
+            } else if(data.event === 'internet_speed'){
+              const ms = data.meta?.ms ?? '?';
+              const sp = String(data.meta?.speed || '').toLowerCase();
+              line3.innerHTML = `Internet: <span class="speed ${sp}">${sp ? sp.toUpperCase() : '?'}</span> (${ms} ms)`;
+            } else if(data.event === 'override_set'){
+              setOverride(data.meta?.text || '');
+            } else if(data.event === 'override_clear'){
+              setOverride('');
             }
+            return;
+          }
 
-            const content = payload?.choices?.[0]?.message?.content;
-            if(!content){
-              setAnswer('No Content', '#e55353');
-              rationaleEl.textContent = '';
+          if(data.type === 'answer'){
+            const payload = data.payload;
+            if(payload?.error){
+              setAnswer('OpenAI error', '#ff4d4f');
               return;
             }
-
-            const { text, rationale } = extractDisplayFromContent(content);
-            const color = statusEmoji === '🔴' ? '#e55353' : (statusEmoji === '🟢' ? '#0fa77a' : '#fff');
-
-            setAnswer(text, color);
-            rationaleEl.innerHTML = rationale || '';
-            renderMath();
+            const content = payload?.choices?.[0]?.message?.content;
+            if(!content){ setAnswer('No Content', '#ff4d4f'); return; }
+            const text = extractDisplayFromContent(content);
+            setAnswer(text, '#fff');
           }
         }catch(err){
-          console.error('Parse error:', err);
-          setAnswer('Error', '#e55353');
-          rationaleEl.textContent = err.message || '';
+          setAnswer('Error', '#ff4d4f');
         }
       };
 
       es.onerror = () => {
-        statusText.textContent = 'Reconnecting...';
+        line1.textContent = 'Reconnecting…';
         es.close();
         setTimeout(connect, 3000);
       };
     }
 
     connect();
-
-    setInterval(()=>{
-      if(es && es.readyState === 2){ // CLOSED
-        connect();
-      }
-    }, 5000);
+    setInterval(()=>{ if(es && es.readyState === 2){ connect(); } }, 5000);
   </script>
-
-  <!-- MathJax for rendering fractions, equations, etc. -->
-  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 </body>
 </html>
