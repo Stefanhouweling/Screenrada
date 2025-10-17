@@ -3,22 +3,42 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Screenrada — Direct Screen Capture</title>
+  <title>Video Capture Multi-Question AI</title>
   <style>
     body{margin:0;background:#0b0b0c;color:#fff;font-family:-apple-system,system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;gap:1rem;padding:1rem}
     video{width:90vw;max-width:1200px;border-radius:10px;background:#000}
     #status{font-size:14px;opacity:.9}
-    #link a{color:#2c7be5;text-decoration:none;font-weight:600}
     #start{border:1px solid #444;padding:.6rem 1rem;border-radius:9px;cursor:pointer;background:#111}
+    #questionSection{display:flex;flex-direction:column;gap:1rem;width:90vw;max-width:1200px;margin-top:1rem}
+    .questionInput{background:#1a1a1a;border:1px solid #444;color:#fff;padding:.8rem;border-radius:8px;font-size:14px;width:100%;box-sizing:border-box}
+    .questionInput::placeholder{color:#666}
+    #addQuestion{background:#2c7be5;border:none;padding:.6rem 1rem;border-radius:8px;cursor:pointer;color:#fff;font-weight:600}
+    .questionItem{background:#1a1a1a;padding:1rem;border-radius:8px;display:flex;gap:1rem;align-items:center}
+    .removeQuestion{background:#e53e3e;border:none;padding:.4rem .8rem;border-radius:6px;cursor:pointer;color:#fff;font-size:12px}
+    #answers{width:90vw;max-width:1200px;margin-top:1rem;background:#1a1a1a;padding:1rem;border-radius:8px;min-height:100px}
+    .answerBlock{margin-bottom:1.5rem;padding-bottom:1.5rem;border-bottom:1px solid #333}
+    .answerBlock:last-child{border-bottom:none}
+    .answerQuestion{color:#2c7be5;font-weight:600;margin-bottom:.5rem}
+    .answerText{color:#fff;line-height:1.6}
   </style>
 </head>
 <body>
-  <h2>🖥️ Screenrada — Direct Screen Capture</h2>
-  <button id="start">Start screen capture</button>
+  <h2>📹 Video Capture Multi-Question AI</h2>
+  <button id="start">Start Video Capture</button>
   <video id="screen" autoplay playsinline muted></video>
   <canvas id="frame" style="display:none"></canvas>
   <div id="status">Idle.</div>
-  <div id="link">Open console → <a href="/console.html" target="_blank">/console.html</a></div>
+  
+  <div id="questionSection" style="display:none">
+    <h3>Questions to Ask AI:</h3>
+    <div id="questionList"></div>
+    <button id="addQuestion">+ Add Question</button>
+  </div>
+
+  <div id="answers" style="display:none">
+    <h3>AI Answers:</h3>
+    <div id="answerList"></div>
+  </div>
 
   <script>
     // ----- DOM refs -----
@@ -33,15 +53,20 @@
     }
     const statusEl = document.getElementById('status');
     const startBtn = document.getElementById('start');
+    const questionSection = document.getElementById('questionSection');
+    const questionList = document.getElementById('questionList');
+    const addQuestionBtn = document.getElementById('addQuestion');
+    const answersDiv = document.getElementById('answers');
+    const answerList = document.getElementById('answerList');
 
     // ----- Tuning -----
-    const GRID = 8;                   // perceptual hash grid
-    const MOTION_STOP_DELTA = 0.10;   // <=10% change => "stable"
-    const STABLE_FRAMES = 4;          // consecutive stable frames
-    const COOL_DOWN_MS = 2000;        // min gap between shots
-    const RETAKE_DELAY_MS = 2000;     // 2s window to consider retake
-    const RETAKE_DIFF = 0.20;         // >=20% change => one retake
-    const SHARP_MIN = 200;            // Laplacian variance threshold
+    const GRID = 8;
+    const MOTION_STOP_DELTA = 0.10;
+    const STABLE_FRAMES = 4;
+    const COOL_DOWN_MS = 2000;
+    const RETAKE_DELAY_MS = 2000;
+    const RETAKE_DIFF = 0.20;
+    const SHARP_MIN = 200;
 
     // ----- State -----
     let lastHash = '';
@@ -52,62 +77,100 @@
     let retakeTimer = null;
     let stream = null;
     let track = null;
+    let questions = [];
+    let questionCounter = 0;
 
-    // Optional SSE (don’t let errors break the page)
-    try{
-      const es = new EventSource('/events');
-      es.onmessage = () => {};
-      es.onerror = () => {};
-    }catch{}
+    // ----- Question Management -----
+    function addQuestion(text = '') {
+      const id = ++questionCounter;
+      const question = { id, text };
+      questions.push(question);
+      
+      const div = document.createElement('div');
+      div.className = 'questionItem';
+      div.dataset.id = id;
+      div.innerHTML = `
+        <input type="text" class="questionInput" placeholder="Enter your question..." value="${text}">
+        <button class="removeQuestion">Remove</button>
+      `;
+      
+      const input = div.querySelector('.questionInput');
+      input.addEventListener('input', (e) => {
+        const q = questions.find(q => q.id === id);
+        if (q) q.text = e.target.value;
+      });
+      
+      const removeBtn = div.querySelector('.removeQuestion');
+      removeBtn.addEventListener('click', () => {
+        questions = questions.filter(q => q.id !== id);
+        div.remove();
+      });
+      
+      questionList.appendChild(div);
+    }
 
-    // ----- Screen Capture -----
-    startBtn.onclick = startScreen;
+    addQuestionBtn.onclick = () => addQuestion();
 
-    async function startScreen(){
+    // Add one default question
+    addQuestion('What is shown on the screen?');
+
+    // ----- Video Capture (USB/Webcam Device) -----
+    startBtn.onclick = startVideoCapture;
+
+    async function startVideoCapture(){
       try{
-        status('🖥️ Choose a screen/window/tab to capture…');
-
-        // Prefer current tab when available for crisp text
-        const displayMediaOptions = {
+        status('📹 Requesting video capture device access…');
+        
+        // Request video input device (this will include USB capture cards)
+        // To specifically target capture devices, you may need to enumerate devices
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(d => d.kind === 'videoinput');
+        
+        console.log('Available video devices:', videoDevices);
+        
+        // Request the video stream - user will select their capture device
+        const constraints = {
           video: {
-            displaySurface: 'browser',               // hint; browsers may ignore
-            logicalSurface: true,                    // include overlays
-            preferCurrentTab: true,                  // Chromium hint
-            width: { ideal: 2560 }, height: { ideal: 1440 }, frameRate: { ideal: 30, max: 60 }
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 30 }
           },
           audio: false
         };
-
-        stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
+        
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
         track = stream.getVideoTracks()[0];
         v.srcObject = stream;
         startBtn.style.display = 'none';
+        questionSection.style.display = 'flex';
+        answersDiv.style.display = 'block';
+        
         await v.play().catch(()=>{});
-
-        // Handle user stopping share
+        
+        // Handle user stopping the stream
         track.addEventListener('ended', () => {
-          status('🛑 Screen share ended. Click "Start screen capture" to begin again.');
+          status('🛑 Video capture ended. Click "Start Video Capture" to begin again.');
           startBtn.style.display = 'inline-block';
+          questionSection.style.display = 'none';
+          answersDiv.style.display = 'none';
           cancelRetake();
           busy = false;
         });
-
-        // Wait for dimensions, then set canvas at devicePixelRatio for sharper OCR
+        
         await waitForDims(v);
         setCanvasSizeToVideo();
-
-        status('✅ Screen ready. I’ll snap when the content stops changing.');
+        status('✅ Video capture ready. I'll snap when the content stops changing.');
         loop();
       }catch(e){
-        status('❌ Screen capture error: ' + (e.message || e));
+        status('❌ Video capture error: ' + (e.message || e));
         console.error(e);
+        console.log('Make sure your USB capture device is connected and you granted camera permissions.');
       }
     }
 
     function setCanvasSizeToVideo(){
       const dpr = Math.max(1, window.devicePixelRatio || 1);
       const vw = v.videoWidth, vh = v.videoHeight;
-      // Render at higher backing resolution to avoid resampling blur
       f.width  = Math.floor(vw * dpr);
       f.height = Math.floor(vh * dpr);
     }
@@ -121,7 +184,6 @@
 
     // ----- Draw & hash -----
     function drawFullFrame(){
-      // Draw the full screen frame into a high-res canvas (no smoothing)
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(v, 0, 0, f.width, f.height);
     }
@@ -141,7 +203,7 @@
               cnt++;
             }
           }
-          out += Math.floor((sum/Math.max(1,cnt))/32); // 0..7
+          out += Math.floor((sum/Math.max(1,cnt))/32);
         }
       }
       return out;
@@ -153,18 +215,15 @@
       return d/a.length;
     }
 
-    // ----- Blur detection: variance of Laplacian -----
     function laplacianVariance(){
       const w = f.width, h = f.height;
       const { data } = ctx.getImageData(0, 0, w, h);
-
       const gray = new Float32Array(w*h);
       for (let y=0, i=0, j=0; y<h; y++){
         for (let x=0; x<w; x++, i+=4, j++){
           gray[j] = (data[i] + data[i+1] + data[i+2]) / 3;
         }
       }
-
       let sum=0, sumSq=0, count=0;
       for (let y=1; y<h-1; y++){
         for (let x=1; x<w-1; x++){
@@ -177,12 +236,11 @@
       return (sumSq / count) - (mean*mean);
     }
 
-    // ----- Core loop: detect “scroll stop” (or number stop) -----
+    // ----- Core loop -----
     function loop(){
       drawFullFrame();
       const h = getHash();
       const d = diffHash(h, lastHash);
-
       if (!busy && d <= MOTION_STOP_DELTA) {
         if (++stableCount >= STABLE_FRAMES) {
           maybeShoot(h);
@@ -191,7 +249,6 @@
       } else {
         stableCount = 0;
       }
-
       lastHash = h;
       requestAnimationFrame(loop);
     }
@@ -208,10 +265,8 @@
       busy = true;
       lastShotAt = Date.now();
       hashAtShot = currentHash;
-
+      
       try{
-        // Measure sharpness; for screen capture this should be high,
-        // but DPI/resampling can still hurt. If soft, we wait a tick & redraw.
         drawFullFrame();
         let sharp = laplacianVariance();
         if (sharp < SHARP_MIN){
@@ -224,24 +279,71 @@
           status(`🟢 Stable & sharp (var=${Math.round(sharp)}). Capturing…`);
         }
 
-        // Full-frame, lossless PNG (at DPR-scaled backing size)
         const base64 = f.toDataURL('image/png').split(',')[1];
-        await fetch('/ask', {
+        
+        // Filter out empty questions
+        const activeQuestions = questions.filter(q => q.text.trim());
+        
+        if (activeQuestions.length === 0) {
+          status('⚠️ No questions entered. Add at least one question.');
+          busy = false;
+          return;
+        }
+
+        status(`📤 Sending image with ${activeQuestions.length} question(s) to AI…`);
+
+        // Send image and all questions to AI
+        const response = await fetch('/ask', {
           method:'POST',
           headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ imageBase64: base64 })
+          body: JSON.stringify({ 
+            imageBase64: base64,
+            questions: activeQuestions.map(q => q.text)
+          })
         });
 
-        status('✅ Sent. Watching for ≥20% change (2s)…');
+        if (response.ok) {
+          const data = await response.json();
+          displayAnswers(data.answers);
+          status('✅ Sent. Watching for ≥20% change (2s)…');
+        } else {
+          status('❌ Server error: ' + response.statusText);
+        }
+
         cancelRetake();
         retakeTimer = setTimeout(checkForRetake, RETAKE_DELAY_MS);
-
       }catch(e){
         status('❌ Capture/Send error: ' + e.message);
         console.error(e);
       }finally{
         busy = false;
       }
+    }
+
+    function displayAnswers(answers) {
+      answerList.innerHTML = '';
+      
+      if (!answers || answers.length === 0) {
+        answerList.innerHTML = '<p style="color:#999">No answers received yet.</p>';
+        return;
+      }
+
+      answers.forEach((answer, index) => {
+        const block = document.createElement('div');
+        block.className = 'answerBlock';
+        
+        const questionDiv = document.createElement('div');
+        questionDiv.className = 'answerQuestion';
+        questionDiv.textContent = `Q${index + 1}: ${answer.question}`;
+        
+        const answerDiv = document.createElement('div');
+        answerDiv.className = 'answerText';
+        answerDiv.textContent = answer.answer;
+        
+        block.appendChild(questionDiv);
+        block.appendChild(answerDiv);
+        answerList.appendChild(block);
+      });
     }
 
     function checkForRetake(){
