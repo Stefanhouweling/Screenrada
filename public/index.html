@@ -171,13 +171,11 @@
         await logConsole('sending_to_ai', {});
         const t0=performance.now();
 
+        // We can omit questions; server will auto-answer all numbered questions
         let resp;
         try{
           resp=await fetch('/ask',{ method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
-            body: JSON.stringify({
-              imageBase64: base64,
-              questions: ["Give the direct answer from the image. Output only the answer text or number. No labels, no explanation."]
-            })
+            body: JSON.stringify({ imageBase64: base64 })
           });
         }catch(netErr){
           status('❌ Network error calling /ask');
@@ -188,19 +186,16 @@
         const speed = ms < 1200 ? 'fast' : (ms < 3000 ? 'medium' : 'slow');
         await logConsole('internet_speed', { ms, speed });
 
-        if(!resp.ok){
-          const errText=await resp.text().catch(()=> '');
-          status('❌ Server error ' + resp.status);
-          lastAnswerText='(server '+resp.status+')';
-          lastJavaText=(errText && errText.trim()) ? ('// /ask error:\n'+errText.trim()) : ('// /ask returned '+resp.status+' '+resp.statusText);
-          renderConsole(); return;
-        }
-
         const data=await resp.json();
-        const answer=(data?.answers?.[0]?.answer ?? '').toString().trim();
 
-        lastAnswerText = answer || '(no answer returned)';
-        lastJavaText   = `// info\nString answer = "${(answer||'').replace(/"/g,'\\"')}";\nSystem.out.println("AI answer: " + answer);`;
+        // Build numbered string: "1. foo  2. bar"
+        const items=(data?.answers||[])
+          .map((a,i)=>({ n: Number.isFinite(+a.number)?+a.number:(i+1), t: (a?.answer||'').toString().trim() }))
+          .filter(x=>x.t)
+          .sort((a,b)=>a.n-b.n);
+
+        lastAnswerText = items.length ? items.map(x=>`${x.n}. ${x.t}`).join('  ') : '(no answer returned)';
+        lastJavaText   = `// info\nString answers = "${lastAnswerText.replace(/"/g,'\\"')}";\nSystem.out.println(answers);`;
         renderConsole();
 
         status('✅ Sent. Watching for ≥20% change (2s)…');
