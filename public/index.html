@@ -48,7 +48,7 @@
     try {
       ctx = f.getContext('2d', { willReadFrequently: true });
       if (!ctx) throw new Error('2D context null with options');
-    } catch {
+    } catch (err) {
       ctx = f.getContext('2d');
     }
     const statusEl = document.getElementById('status');
@@ -81,35 +81,33 @@
     let questionCounter = 0;
 
     // ----- Question Management -----
-    function addQuestion(text = '') {
+    function addQuestion(text) {
+      text = text || '';
       const id = ++questionCounter;
-      const question = { id, text };
+      const question = { id: id, text: text };
       questions.push(question);
       
       const div = document.createElement('div');
       div.className = 'questionItem';
       div.dataset.id = id;
-      div.innerHTML = `
-        <input type="text" class="questionInput" placeholder="Enter your question..." value="${text}">
-        <button class="removeQuestion">Remove</button>
-      `;
+      div.innerHTML = '<input type="text" class="questionInput" placeholder="Enter your question..." value="' + text + '"><button class="removeQuestion">Remove</button>';
       
       const input = div.querySelector('.questionInput');
-      input.addEventListener('input', (e) => {
-        const q = questions.find(q => q.id === id);
+      input.addEventListener('input', function(e) {
+        const q = questions.find(function(q) { return q.id === id; });
         if (q) q.text = e.target.value;
       });
       
       const removeBtn = div.querySelector('.removeQuestion');
-      removeBtn.addEventListener('click', () => {
-        questions = questions.filter(q => q.id !== id);
+      removeBtn.addEventListener('click', function() {
+        questions = questions.filter(function(q) { return q.id !== id; });
         div.remove();
       });
       
       questionList.appendChild(div);
     }
 
-    addQuestionBtn.onclick = () => addQuestion();
+    addQuestionBtn.onclick = function() { addQuestion(); };
 
     // Add one default question
     addQuestion('What is shown on the screen?');
@@ -127,10 +125,10 @@
           throw new Error('getUserMedia not supported in this browser. Try Chrome or Edge.');
         }
         
-        // First, enumerate devices to see what's available
+        // First, enumerate devices to see what is available
         console.log('Enumerating video devices...');
         const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = devices.filter(d => d.kind === 'videoinput');
+        const videoDevices = devices.filter(function(d) { return d.kind === 'videoinput'; });
         
         console.log('Available video devices:', videoDevices);
         console.log('Total video devices found:', videoDevices.length);
@@ -167,13 +165,13 @@
         answersDiv.style.display = 'block';
         
         status('📹 Video loading...');
-        await v.play().catch((err)=>{
+        await v.play().catch(function(err){
           console.error('Video play error:', err);
         });
         console.log('Video playing');
         
         // Handle user stopping the stream
-        track.addEventListener('ended', () => {
+        track.addEventListener('ended', function() {
           status('🛑 Video capture ended. Click "Start Video Capture" to begin again.');
           startBtn.style.display = 'inline-block';
           questionSection.style.display = 'none';
@@ -189,7 +187,7 @@
         setCanvasSizeToVideo();
         console.log('Canvas size set:', f.width, 'x', f.height);
         
-        status('✅ Video capture ready. I'll snap when the content stops changing.');
+        status('✅ Video capture ready. I will snap when the content stops changing.');
         loop();
       }catch(e){
         status('❌ Video capture error: ' + (e.message || e));
@@ -212,13 +210,14 @@
 
     function setCanvasSizeToVideo(){
       const dpr = Math.max(1, window.devicePixelRatio || 1);
-      const vw = v.videoWidth, vh = v.videoHeight;
+      const vw = v.videoWidth;
+      const vh = v.videoHeight;
       f.width  = Math.floor(vw * dpr);
       f.height = Math.floor(vh * dpr);
     }
 
     async function waitForDims(videoEl){
-      for (let i=0;i<40;i++){
+      for (let i=0; i<40; i++){
         if (videoEl.videoWidth && videoEl.videoHeight) return;
         await waitMs(50);
       }
@@ -231,13 +230,18 @@
     }
 
     function getHash(){
-      const w=f.width, h=f.height;
-      const cw = Math.max(1, Math.floor(w/GRID)), ch = Math.max(1, Math.floor(h/GRID));
+      const w = f.width;
+      const h = f.height;
+      const cw = Math.max(1, Math.floor(w/GRID));
+      const ch = Math.max(1, Math.floor(h/GRID));
       const img = ctx.getImageData(0,0,w,h).data;
       let out = '';
       for(let gy=0; gy<GRID; gy++){
         for(let gx=0; gx<GRID; gx++){
-          let sum=0, cnt=0, sy=gy*ch, sx=gx*cw;
+          let sum=0;
+          let cnt=0;
+          let sy=gy*ch;
+          let sx=gx*cw;
           for(let y=sy; y<Math.min(sy+ch,h); y++){
             for(let x=sx; x<Math.min(sx+cw,w); x++){
               const i=(y*w+x)*4;
@@ -252,26 +256,35 @@
     }
 
     function diffHash(a,b){
-      if(!a || !b || a.length!==b.length) return 1;
-      let d=0; for(let i=0;i<a.length;i++) if(a[i]!==b[i]) d++;
+      if(!a || !b || a.length !== b.length) return 1;
+      let d=0;
+      for(let i=0; i<a.length; i++) {
+        if(a[i] !== b[i]) d++;
+      }
       return d/a.length;
     }
 
     function laplacianVariance(){
-      const w = f.width, h = f.height;
-      const { data } = ctx.getImageData(0, 0, w, h);
+      const w = f.width;
+      const h = f.height;
+      const imgData = ctx.getImageData(0, 0, w, h);
+      const data = imgData.data;
       const gray = new Float32Array(w*h);
       for (let y=0, i=0, j=0; y<h; y++){
         for (let x=0; x<w; x++, i+=4, j++){
           gray[j] = (data[i] + data[i+1] + data[i+2]) / 3;
         }
       }
-      let sum=0, sumSq=0, count=0;
+      let sum=0;
+      let sumSq=0;
+      let count=0;
       for (let y=1; y<h-1; y++){
         for (let x=1; x<w-1; x++){
           const idx = y*w + x;
           const L = -4*gray[idx] + gray[idx-1] + gray[idx+1] + gray[idx-w] + gray[idx+w];
-          sum += L; sumSq += L*L; count++;
+          sum += L;
+          sumSq += L*L;
+          count++;
         }
       }
       const mean = sum / count;
@@ -312,19 +325,19 @@
         drawFullFrame();
         let sharp = laplacianVariance();
         if (sharp < SHARP_MIN){
-          status(`🔎 Soft frame (var=${Math.round(sharp)} < ${SHARP_MIN}). Re-draw…`);
+          status('🔎 Soft frame (var=' + Math.round(sharp) + ' < ' + SHARP_MIN + '). Re-draw…');
           await waitMs(100);
           drawFullFrame();
           sharp = laplacianVariance();
-          status(`🔍 Sharpness after redraw: var=${Math.round(sharp)}`);
+          status('🔍 Sharpness after redraw: var=' + Math.round(sharp));
         }else{
-          status(`🟢 Stable & sharp (var=${Math.round(sharp)}). Capturing…`);
+          status('🟢 Stable & sharp (var=' + Math.round(sharp) + '). Capturing…');
         }
 
         const base64 = f.toDataURL('image/png').split(',')[1];
         
         // Filter out empty questions
-        const activeQuestions = questions.filter(q => q.text.trim());
+        const activeQuestions = questions.filter(function(q) { return q.text.trim(); });
         
         if (activeQuestions.length === 0) {
           status('⚠️ No questions entered. Add at least one question.');
@@ -332,7 +345,7 @@
           return;
         }
 
-        status(`📤 Sending image with ${activeQuestions.length} question(s) to AI…`);
+        status('📤 Sending image with ' + activeQuestions.length + ' question(s) to AI…');
 
         // Send image and all questions to AI
         const response = await fetch('/ask', {
@@ -340,7 +353,7 @@
           headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ 
             imageBase64: base64,
-            questions: activeQuestions.map(q => q.text)
+            questions: activeQuestions.map(function(q) { return q.text; })
           })
         });
 
@@ -370,13 +383,13 @@
         return;
       }
 
-      answers.forEach((answer, index) => {
+      answers.forEach(function(answer, index) {
         const block = document.createElement('div');
         block.className = 'answerBlock';
         
         const questionDiv = document.createElement('div');
         questionDiv.className = 'answerQuestion';
-        questionDiv.textContent = `Q${index + 1}: ${answer.question}`;
+        questionDiv.textContent = 'Q' + (index + 1) + ': ' + answer.question;
         
         const answerDiv = document.createElement('div');
         answerDiv.className = 'answerText';
@@ -393,22 +406,25 @@
       const newHash = getHash();
       const change = diffHash(newHash, hashAtShot || '');
       if (change >= RETAKE_DIFF) {
-        status(`🔁 Change ${Math.round(change*100)}% ≥ 20%. Taking one retake…`);
+        status('🔁 Change ' + Math.round(change*100) + '% ≥ 20%. Taking one retake…');
         if (cooldownOver()) shoot(newHash);
       } else {
-        status(`⏹ Change ${Math.round(change*100)}% < 20%. No retake.`);
+        status('⏹ Change ' + Math.round(change*100) + '% < 20%. No retake.');
       }
       hashAtShot = null;
       cancelRetake();
     }
 
     function cancelRetake(){
-      if (retakeTimer) { clearTimeout(retakeTimer); retakeTimer = null; }
+      if (retakeTimer) {
+        clearTimeout(retakeTimer);
+        retakeTimer = null;
+      }
     }
 
     // ----- Helpers -----
     function status(t){ statusEl.textContent = t; }
-    function waitMs(ms){ return new Promise(r=>setTimeout(r, ms)); }
+    function waitMs(ms){ return new Promise(function(r) { setTimeout(r, ms); }); }
   </script>
 </body>
 </html>
