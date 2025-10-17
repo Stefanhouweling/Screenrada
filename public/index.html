@@ -5,51 +5,29 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Screen Capture → AI → Console</title>
   <style>
-    :root{
-      --card:#111; --muted:#1a1a1a; --border:#2a2a2a; --accent:#2c7be5;
-      --override:#ffd166;
-    }
-    body{
-      margin:0;background:#0b0b0c;color:#fff;
-      font-family:-apple-system,system-ui,sans-serif;
-      display:flex;flex-direction:column;align-items:center;gap:1rem;padding:1rem;
-    }
-    h2{margin:0 0 .2rem 0}
-    #start{border:1px solid #444;padding:.6rem 1rem;border-radius:9px;cursor:pointer;background:#111}
-    video{width:90vw;max-width:1200px;border-radius:10px;background:#000}
-    #status{font-size:14px;opacity:.9}
-
-    .row{width:90vw;max-width:1200px;display:grid;gap:1rem}
-    .card{background:var(--muted);border:1px solid var(--border);border-radius:12px;padding:1rem}
-    .consoleHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem}
-    .pill{font-size:12px;border:1px solid var(--border);padding:.2rem .5rem;border-radius:999px;opacity:.85}
-    .muted{color:#bbb}
-
-    /* BIG centered AI answer */
-    #answerWrap{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:120px}
-    .answerBig{
-      font-size:68px;font-weight:900;line-height:1;text-align:center;
-      text-shadow:0 0 40px rgba(44,123,229,.25);margin:.25rem 0 .5rem 0;
-    }
-
-    /* Override line */
-    .overrideLabel{font-size:14px;letter-spacing:.08em;opacity:.9;margin-bottom:.2rem;text-transform:uppercase}
-    .overrideLine{
-      font-size:40px;font-weight:800;line-height:1.1;text-align:center;
-      color:var(--override);word-break:break-word;
-    }
-
-    /* Override input row */
-    .ovRow{display:flex;gap:.5rem;align-items:center;margin:.25rem 0 1rem 0}
-    .ovInput{
-      flex:1;background:#141414;border:1px solid #3a3a3a;color:#fff;
-      border-radius:10px;padding:.7rem .9rem;font-size:16px;
-    }
-    .btn{background:var(--accent);border:none;color:#fff;border-radius:10px;padding:.65rem 1rem;cursor:pointer;font-weight:700}
-    .btn.secondary{background:#444}
-
-    pre{margin:0;white-space:pre-wrap;word-break:break-word}
-    code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    :root{ --muted:#1a1a1a; --border:#2a2a2a; --accent:#2c7be5; --override:#ffd166; }
+    body{ margin:0;background:#0b0b0c;color:#fff;font-family:-apple-system,system-ui,sans-serif;
+          display:flex;flex-direction:column;align-items:center;gap:1rem;padding:1rem; }
+    h2{ margin:0 0 .2rem 0 }
+    #start{ border:1px solid #444;padding:.6rem 1rem;border-radius:9px;cursor:pointer;background:#111 }
+    video{ width:90vw;max-width:1200px;border-radius:10px;background:#000 }
+    #status{ font-size:14px;opacity:.9 }
+    .row{ width:90vw;max-width:1200px;display:grid;gap:1rem }
+    .card{ background:var(--muted);border:1px solid var(--border);border-radius:12px;padding:1rem }
+    .consoleHead{ display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem }
+    .pill{ font-size:12px;border:1px solid var(--border);padding:.2rem .5rem;border-radius:999px;opacity:.85 }
+    .muted{ color:#bbb }
+    #answerWrap{ display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:120px }
+    .answerBig{ font-size:68px;font-weight:900;line-height:1;text-align:center;
+                text-shadow:0 0 40px rgba(44,123,229,.25);margin:.25rem 0 .5rem 0; }
+    .overrideLabel{ font-size:14px;letter-spacing:.08em;opacity:.9;margin-bottom:.2rem;text-transform:uppercase }
+    .overrideLine{ font-size:40px;font-weight:800;line-height:1.1;text-align:center;color:var(--override);word-break:break-word; }
+    .ovRow{ display:flex;gap:.5rem;align-items:center;margin:.25rem 0 1rem 0 }
+    .ovInput{ flex:1;background:#141414;border:1px solid #3a3a3a;color:#fff;border-radius:10px;padding:.7rem .9rem;font-size:16px; }
+    .btn{ background:var(--accent);border:none;color:#fff;border-radius:10px;padding:.65rem 1rem;cursor:pointer;font-weight:700 }
+    .btn.secondary{ background:#444 }
+    pre{ margin:0;white-space:pre-wrap;word-break:break-word }
+    code{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
   </style>
 </head>
 <body>
@@ -68,12 +46,10 @@
         </div>
       </div>
 
-      <!-- BIG centered AI answer + Override line -->
       <div id="answerWrap">
         <div class="muted">Waiting for first stable frame…</div>
       </div>
 
-      <!-- Override input controls -->
       <div class="ovRow">
         <input id="ovInput" class="ovInput" placeholder="Type an override (Enter or click Set)…">
         <button class="btn" id="setOverride">Set</button>
@@ -82,7 +58,6 @@
 
       <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0">
 
-      <!-- Java snippet -->
       <div>
         <div class="muted" style="margin-bottom:.25rem">Java Snippet</div>
         <pre><code id="javaOut">// (will appear after first AI response)</code></pre>
@@ -104,7 +79,6 @@
     const javaOut = document.getElementById('javaOut');
     const lastTime = document.getElementById('lastTime');
 
-    // Override controls
     const ovInput = document.getElementById('ovInput');
     const setOverrideBtn = document.getElementById('setOverride');
     const clearOverrideBtn = document.getElementById('clearOverride');
@@ -118,12 +92,12 @@
     const RETAKE_DIFF = 0.20;
     const SHARP_MIN = 200;
 
-    // ----- State (single declarations) -----
+    // ----- State -----
     let lastHash = '';
     let stableCount = 0;
     let busy = false;
-    let lastShotAt = 0;      // <— declared once
-    let hashAtShot = null;   // <— declared once
+    let lastShotAt = 0;
+    let hashAtShot = null;
     let retakeTimer = null;
     let stream = null;
     let track = null;
@@ -132,13 +106,16 @@
     let lastJavaText   = '';
     let overrideText   = '';
 
-    // ----- Video start -----
+    // Render once so Override can show before first AI response
+    renderConsole();
+
+    // ----- Start video -----
     startBtn.onclick = startVideoCapture;
 
     async function startVideoCapture(){
       try{
         status('📹 Requesting video capture device access…');
-        if (!navigator.mediaDevices?.getUserMedia) throw new Error('getUserMedia not supported. Try Chrome/Edge.');
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error('getUserMedia not supported. Use Chrome/Edge or localhost/HTTPS.');
         const devices = await navigator.mediaDevices.enumerateDevices();
         if (!devices.some(d => d.kind === 'videoinput')) throw new Error('No video devices found.');
         const constraints = { video: { width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30} }, audio:false };
@@ -211,35 +188,73 @@
         if(sharp<SHARP_MIN){ status('🔎 Soft frame (var='+Math.round(sharp)+'). Re-draw…'); await waitMs(100); drawFullFrame(); }
         else { status('🟢 Stable & sharp. Capturing…'); }
 
-        const base64=f.toDataURL('image/png').split(',')[1];
+        const dataUrl = f.toDataURL('image/png');
+        const base64  = dataUrl.split(',')[1];
 
         status('📤 Sending image to AI…');
-        const resp = await fetch('/ask', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ imageBase64: base64 }) });
-        if(!resp.ok) throw new Error('Server error: '+resp.status+' '+resp.statusText);
-        const data = await resp.json();
 
-        const answer = (data.answer ?? data.result ?? data.final ?? data?.answers?.[0]?.answer ?? '').toString().trim();
-        let java   = (data.java ?? data.code?.java ?? data.snippet ?? '').toString();
-        if(!java){
-          const safe = answer || '/* unknown */';
-          java =
-`// Java (Selenium) — fallback
-String answer = "${safe}";
-System.out.println("AI answer: " + answer);
-WebElement choice = driver.findElement(By.xpath("//label[normalize-space()='" + answer + "']"));
-choice.click();`;
+        let resp;
+        try {
+          resp = await fetch('/ask', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+              imageBase64: base64,
+              // REQUIRED by your server (but NOT multiple-choice): single direct-answer prompt
+              questions: [
+                "Give the direct answer from the image. Output only the answer text or number. No labels, no explanation."
+              ]
+            })
+          });
+        } catch (netErr) {
+          status('❌ Network error calling /ask');
+          lastAnswerText = '(network error)';
+          lastJavaText   = '// could not reach /ask';
+          renderConsole();
+          console.error(netErr);
+          return;
         }
+
+        if(!resp.ok){
+          const errText = await resp.text().catch(()=> '');
+          status('❌ Server error ' + resp.status);
+          lastAnswerText = '(server ' + resp.status + ')';
+          lastJavaText   = (errText && errText.trim())
+            ? '// /ask error:\n' + errText.trim()
+            : '// /ask returned ' + resp.status + ' ' + resp.statusText;
+          renderConsole();
+          console.error('Server error from /ask:', errText || resp.statusText);
+          return;
+        }
+
+        const data = await resp.json();
+        const answer = (data?.answers?.[0]?.answer ?? '').toString().trim();
+
+        // Fallback "java" area doubles as diagnostics area
+        const javaFallback =
+`// Direct click example (adjust for your DOM) — not matching choices
+String answer = "${answer.replace(/"/g,'\\"')}";
+System.out.println("AI answer: " + answer);`;
+
         lastAnswerText = answer || '(no answer returned)';
-        lastJavaText   = java;
+        lastJavaText   = javaFallback;
         renderConsole();
 
         console.log('[AI ANSWER]', lastAnswerText);
-        console.log('[AI JAVA]\\n' + lastJavaText);
+        console.log('[INFO] Response object:', data);
 
         status('✅ Sent. Watching for ≥20% change (2s)…');
         cancelRetake(); retakeTimer=setTimeout(checkForRetake, RETAKE_DELAY_MS);
-      }catch(e){ status('❌ Capture/Send error: ' + (e.message||e)); console.error(e); }
-      finally{ busy=false; }
+      }catch(e){
+        status('❌ Capture/Send error: ' + (e.message||e));
+        lastAnswerText = '(client error)';
+        lastJavaText   = '// ' + (e.message || e);
+        renderConsole();
+        console.error(e);
+      }finally{
+        busy=false;
+      }
     }
 
     function renderConsole(){
