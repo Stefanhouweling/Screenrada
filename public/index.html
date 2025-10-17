@@ -7,7 +7,7 @@
   <style>
     :root{
       --card:#111; --muted:#1a1a1a; --border:#2a2a2a; --accent:#2c7be5;
-      --override:#ffd166; /* high-contrast gold for Override line */
+      --override:#ffd166;
     }
     body{
       margin:0;background:#0b0b0c;color:#fff;
@@ -21,7 +21,6 @@
 
     .row{width:90vw;max-width:1200px;display:grid;gap:1rem}
     .card{background:var(--muted);border:1px solid var(--border);border-radius:12px;padding:1rem}
-
     .consoleHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem}
     .pill{font-size:12px;border:1px solid var(--border);padding:.2rem .5rem;border-radius:999px;opacity:.85}
     .muted{color:#bbb}
@@ -34,11 +33,11 @@
     }
 
     /* Override line */
+    .overrideLabel{font-size:14px;letter-spacing:.08em;opacity:.9;margin-bottom:.2rem;text-transform:uppercase}
     .overrideLine{
       font-size:40px;font-weight:800;line-height:1.1;text-align:center;
       color:var(--override);word-break:break-word;
     }
-    .overrideLabel{font-size:14px;letter-spacing:.08em;opacity:.9;margin-bottom:.2rem;text-transform:uppercase}
 
     /* Override input row */
     .ovRow{display:flex;gap:.5rem;align-items:center;margin:.25rem 0 1rem 0}
@@ -67,10 +66,6 @@
           <span class="pill">AI Console</span>
           <span class="muted" id="lastTime" style="margin-left:.5rem"></span>
         </div>
-        <div>
-          <button class="btn" id="copyAnswer">Copy Answer</button>
-          <button class="btn" id="copyJava" style="margin-left:.4rem">Copy Java</button>
-        </div>
       </div>
 
       <!-- BIG centered AI answer + Override line -->
@@ -80,7 +75,7 @@
 
       <!-- Override input controls -->
       <div class="ovRow">
-        <input id="ovInput" class="ovInput" placeholder="Type an override (press Enter or click Set)…">
+        <input id="ovInput" class="ovInput" placeholder="Type an override (Enter or click Set)…">
         <button class="btn" id="setOverride">Set</button>
         <button class="btn secondary" id="clearOverride">Clear</button>
       </div>
@@ -108,8 +103,6 @@
     const answerWrap = document.getElementById('answerWrap');
     const javaOut = document.getElementById('javaOut');
     const lastTime = document.getElementById('lastTime');
-    const copyAnswerBtn = document.getElementById('copyAnswer');
-    const copyJavaBtn = document.getElementById('copyJava');
 
     // Override controls
     const ovInput = document.getElementById('ovInput');
@@ -125,21 +118,19 @@
     const RETAKE_DIFF = 0.20;
     const SHARP_MIN = 200;
 
-    // ----- State -----
+    // ----- State (single declarations) -----
     let lastHash = '';
     let stableCount = 0;
     let busy = false;
-    let lastShotAt = 0;
-    let hashAtShot = null;
+    let lastShotAt = 0;      // <— declared once
+    let hashAtShot = null;   // <— declared once
     let retakeTimer = null;
     let stream = null;
     let track = null;
 
     let lastAnswerText = '';
     let lastJavaText   = '';
-
-    // override state
-    let overrideText = '';
+    let overrideText   = '';
 
     // ----- Video start -----
     startBtn.onclick = startVideoCapture;
@@ -193,7 +184,7 @@
       const w=f.width,h=f.height, id=ctx.getImageData(0,0,w,h), data=id.data, gray=new Float32Array(w*h);
       for(let y=0,i=0,j=0;y<h;y++){ for(let x=0;x<w;x++,i+=4,j++){ gray[j]=(data[i]+data[i+1]+data[i+2])/3; } }
       let sum=0,sumSq=0,count=0;
-      for(let y=1;y<h-1;y++) for(let x=1;x<h-1;x++){
+      for(let y=1;y<h-1;y++) for(let x=1;x<w-1;x++){
         const idx=y*w+x, L=-4*gray[idx]+gray[idx-1]+gray[idx+1]+gray[idx-w]+gray[idx+w];
         sum+=L; sumSq+=L*L; count++;
       }
@@ -211,9 +202,6 @@
     }
     const cooldownOver = ()=> (Date.now()-lastShotAt)>=COOL_DOWN_MS;
     function maybeShoot(h){ if(!cooldownOver()) return; shoot(h); }
-
-    let lastShotAt = 0;
-    let hashAtShot = null;
 
     async function shoot(currentHash){
       busy=true; lastShotAt=Date.now(); hashAtShot=currentHash;
@@ -255,7 +243,6 @@ choice.click();`;
     }
 
     function renderConsole(){
-      // rebuild console block each time to keep layout consistent
       answerWrap.innerHTML = '';
 
       const big = document.createElement('div');
@@ -291,12 +278,7 @@ choice.click();`;
     function waitMs(ms){ return new Promise(r=>setTimeout(r,ms)); }
     function status(t){ statusEl.textContent=t; }
 
-    // ----- Copy & Override controls -----
-    copyAnswerBtn.addEventListener('click', () =>
-      navigator.clipboard?.writeText(lastAnswerText||'').then(()=>status('📋 Answer copied.')).catch(()=>{}));
-    copyJavaBtn.addEventListener('click', () =>
-      navigator.clipboard?.writeText(lastJavaText||'').then(()=>status('📋 Java copied.')).catch(()=>{}));
-
+    // ----- Override controls -----
     function setOverride(text){
       overrideText = (text||'').trim();
       renderConsole();
