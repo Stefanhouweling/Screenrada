@@ -18,7 +18,7 @@ const sse = (payload) => {
   for (const c of consoleClients) c.write(str);
 };
 
-// NEW: client pushes console status + override here
+// Log events from client (status + override)
 app.post("/log", (req, res) => {
   const { event, meta } = req.body || {};
   if (!event) return res.status(400).json({ error: "missing event" });
@@ -30,10 +30,13 @@ app.post("/ask", async (req, res) => {
   try {
     const { imageBase64 } = req.body || {};
     let { questions } = req.body || {};
+    if (!imageBase64) {
+      // Never 4xx to the browser; return a safe 200 payload
+      const answer = "(error) Missing imageBase64";
+      sse({ type: "answer", internet: "🔴", payload: { error: { message: answer } } });
+      return res.status(200).json({ answers: [{ question: "n/a", answer }] });
+    }
 
-    if (!imageBase64) return res.status(400).json({ error: "Missing imageBase64" });
-
-    // Allow default question (you removed UI)
     if (!Array.isArray(questions) || questions.length === 0) {
       questions = [
         "Give the direct answer from the image. Output only the answer text or number. No labels, no explanation."
@@ -70,22 +73,32 @@ No code fences or extra text.`
       ]
     };
 
-    const r = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${OPENAI_API_KEY}` },
-      body: JSON.stringify(body)
-    });
+    let r, responseData;
+    try {
+      r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${OPENAI_API_KEY}` },
+        body: JSON.stringify(body)
+      });
+      responseData = await r.json();
+    } catch (netErr) {
+      const answer = `(error) OpenAI network: ${netErr.message || netErr}`;
+      sse({ type: "answer", internet: "🔴", payload: { error: { message: answer } } });
+      return res.status(200).json({ answers: [{ question: questions[0], answer }] });
+    }
 
-    const responseData = await r.json();
+    // Broadcast raw to console
+    sse({ type: "answer", internet: r?.ok ? "🟢" : "🔴", payload: responseData, questionCount: questions.length });
 
-    // Stream raw OpenAI response to console
-    sse({ type: "answer", internet: r.ok ? "🟢" : "🔴", payload: responseData, questionCount: questions.length });
-
-    if (!r.ok) return res.status(r.status).json(responseData);
+    if (!r?.ok) {
+      const msg = responseData?.error?.message || (r?.statusText || "Upstream error");
+      const answer = `(error) OpenAI ${r.status}: ${msg}`;
+      return res.status(200).json({ answers: [{ question: questions[0], answer }] });
+    }
 
     const content = responseData?.choices?.[0]?.message?.content;
 
-    // Robust parsing
+    // Robust parsing → prefer JSON with {answers:[...]}
     let parsed = null;
     if (typeof content === "string") {
       try { parsed = JSON.parse(content); } catch {}
@@ -105,20 +118,23 @@ No code fences or extra text.`
     } else if (parsed?.answer) {
       normalized = { answers: [{ question: questions[0], answer: parsed.answer }] };
     } else if (typeof content === "string") {
+      // fallback: treat raw string as the answer
       normalized = { answers: [{ question: questions[0], answer: content.trim() }] };
     } else {
-      return res.status(502).json({ error: "ParseError", raw: content });
+      const answer = "(error) ParseError: could not extract JSON content from model";
+      return res.status(200).json({ answers: [{ question: questions[0], answer }] });
     }
 
     if (!normalized.answers.length || typeof normalized.answers[0].answer !== "string") {
-      return res.status(502).json({ error: "Invalid response format from AI", raw: normalized });
+      const answer = "(error) Invalid response format from AI";
+      return res.status(200).json({ answers: [{ question: questions[0], answer }] });
     }
 
     return res.status(200).json(normalized);
   } catch (e) {
-    console.error("Server error:", e);
-    sse({ type: "error", internet: "🔴", payload: { error: e.message } });
-    return res.status(500).json({ error: e.message || "Server error" });
+    const answer = `(error) Server exception: ${e.message || e}`;
+    sse({ type: "error", internet: "🔴", payload: { error: e?.message || String(e) } });
+    return res.status(200).json({ answers: [{ question: "n/a", answer }] });
   }
 });
 
