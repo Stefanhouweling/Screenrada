@@ -6,48 +6,22 @@
   <title>AI Console Display</title>
   <style>
     body{
-      margin:0;
-      background:#000;
-      color:#fff;
-      font-family:-apple-system,system-ui,sans-serif;
-      display:flex;
-      flex-direction:column;
-      align-items:center;
-      justify-content:center;
-      height:100vh;
-      text-align:center;
-      padding:20px;
+      margin:0;background:#000;color:#fff;font-family:-apple-system,system-ui,sans-serif;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      height:100vh;text-align:center;padding:20px;
     }
     #status{
-      font-size:32px;
-      margin-bottom:30px;
-      opacity:.9;
-      display:flex;
-      align-items:center;
-      gap:15px;
+      font-size:32px;margin-bottom:30px;opacity:.9;display:flex;align-items:center;gap:15px;
     }
     #emoji{font-size:48px}
     #answer{
-      font-size:120px;
-      font-weight:900;
-      margin-bottom:30px;
-      line-height:1.1;
+      font-size:120px;font-weight:900;margin-bottom:30px;line-height:1.1;
       text-shadow:0 0 40px rgba(44,123,229,.3);
     }
-    #rationale{
-      font-size:28px;
-      opacity:.7;
-      max-width:800px;
-      line-height:1.4;
-    }
+    #rationale{font-size:28px;opacity:.7;max-width:800px;line-height:1.4}
     #speed{font-size:36px;margin-left:10px}
-    .pulse{
-      animation:pulse 2s ease-in-out infinite;
-    }
-    @keyframes pulse{
-      0%,100%{opacity:1}
-      50%{opacity:.6}
-    }
+    .pulse{animation:pulse 2s ease-in-out infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
     @media(max-width:800px){
       #answer{font-size:72px}
       #rationale{font-size:20px}
@@ -63,118 +37,126 @@
   </div>
   <div id="answer">Waiting...</div>
   <div id="rationale"></div>
-  
+
   <script>
-    const emoji=document.getElementById('emoji');
-    const statusText=document.getElementById('statusText');
-    const answer=document.getElementById('answer');
-    const rationale=document.getElementById('rationale');
-    const speed=document.getElementById('speed');
-    
-    const statusMap={
+    const emoji = document.getElementById('emoji');
+    const statusText = document.getElementById('statusText');
+    const answerEl = document.getElementById('answer');
+    const rationaleEl = document.getElementById('rationale');
+    const speed = document.getElementById('speed');
+
+    const statusMap = {
       '🟢':'Question detected',
       '🟡':'New question',
       '🔵':'Stable',
       '🔴':'Error',
       '💤':'Idle'
     };
-    
-    let eventSource;
 
-    function connect(){
-      eventSource=new EventSource('/events');
-      
-      eventSource.onmessage=(msg)=>{
-        try{
-          const data=JSON.parse(msg.data);
-          if(data.type==='answer'){
-            const statusEmoji=data.internet||'💤';
-            emoji.textContent=statusEmoji;
-            statusText.textContent=statusMap[statusEmoji]||'Unknown';
-            speed.textContent=statusEmoji;
-            
-            const payload=data.payload;
-            let apiResponse;
-            try{
-              apiResponse=JSON.parse(payload);
-            }catch{
-              console.error('Failed to parse payload');
-              answer.textContent='Parse Error';
-              return;
-            }
-            
-            const content=apiResponse.choices?.[0]?.message?.content;
-            if(!content){
-              console.error('No content in response');
-              answer.textContent='No Content';
-              return;
-            }
-            
-            let answerData;
-            try{
-              answerData=JSON.parse(content);
-            }catch{
-              console.error('Failed to parse content JSON');
-              answer.textContent=content;
-              renderMath();
-              return;
-            }
-            
-            let display='';
-            if(answerData.answer!==undefined){
-              display=String(answerData.answer);
-            }else if(answerData.result_number!==undefined){
-              display=String(answerData.result_number);
-            }
-            
-            answer.innerHTML=display||'No answer';
-            answer.classList.add('pulse');
-            setTimeout(()=>answer.classList.remove('pulse'),2000);
-            
-            rationale.innerHTML=answerData.work||'';
-            renderMath();
-            
-            if(statusEmoji==='🔴'){
-              answer.style.color='#e55353';
-            }else if(statusEmoji==='🟢'){
-              answer.style.color='#0fa77a';
-            }else{
-              answer.style.color='#fff';
-            }
-          }
-        }catch(err){
-          console.error('Parse error:',err);
-          answer.textContent='Error';
-          rationale.textContent=err.message;
-        }
-      };
-      
-      eventSource.onerror=()=>{
-        console.log('Connection lost, reconnecting...');
-        statusText.textContent='Reconnecting...';
-        eventSource.close();
-        setTimeout(connect,3000);
-      };
+    function setAnswer(text, color){
+      answerEl.innerHTML = text || 'No answer';
+      answerEl.classList.add('pulse');
+      setTimeout(()=>answerEl.classList.remove('pulse'), 2000);
+      answerEl.style.color = color || '#fff';
     }
-    
-    connect();
-    
-    setInterval(()=>{
-      if(eventSource.readyState===2){
-        console.log('Reconnecting...');
-        connect();
-      }
-    },5000);
-  </script>
 
-  <!-- MathJax for rendering fractions, equations, etc. -->
-  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-  <script>
     function renderMath(){
       if(window.MathJax && MathJax.typesetPromise){
         MathJax.typesetPromise();
       }
     }
+
+    function extractDisplayFromContent(content){
+      // Try JSON first (model should return JSON per your server prompt)
+      if(typeof content === 'string'){
+        let parsed;
+        try { parsed = JSON.parse(content); }
+        catch{
+          // Try stripping code fences
+          const m = content.match(/^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$/i);
+          if(m){
+            try { parsed = JSON.parse(m[1]); } catch {}
+          }
+        }
+        if(parsed){
+          // Prefer the spec: { answers: [{ answer: "..." }]}
+          const fromArray = parsed?.answers?.[0]?.answer;
+          if(typeof fromArray === 'string') return { text: fromArray, rationale: '' };
+
+          // Fallbacks sometimes used
+          if(typeof parsed.answer === 'string') return { text: parsed.answer, rationale: parsed.work || '' };
+          if(typeof parsed.result_number !== 'undefined') return { text: String(parsed.result_number), rationale: parsed.work || '' };
+        }
+        // Not JSON → show raw string
+        return { text: content, rationale: '' };
+      }
+      // Not a string (unexpected) → stringify
+      try { return { text: JSON.stringify(content), rationale: '' }; }
+      catch { return { text: 'Unparseable content', rationale: '' }; }
+    }
+
+    let es;
+    function connect(){
+      es = new EventSource('/events');
+
+      es.onmessage = (msg) => {
+        try{
+          const data = JSON.parse(msg.data);
+
+          if(data.type === 'answer'){
+            const statusEmoji = data.internet || '💤';
+            emoji.textContent = statusEmoji;
+            statusText.textContent = statusMap[statusEmoji] || 'Unknown';
+            speed.textContent = statusEmoji;
+
+            // payload is already an OBJECT (the OpenAI API JSON). Do NOT JSON.parse it.
+            const payload = data.payload;
+
+            // Handle OpenAI error objects
+            if(payload?.error){
+              setAnswer('OpenAI error', '#e55353');
+              rationaleEl.textContent = payload.error?.message || JSON.stringify(payload.error);
+              return renderMath();
+            }
+
+            const content = payload?.choices?.[0]?.message?.content;
+            if(!content){
+              setAnswer('No Content', '#e55353');
+              rationaleEl.textContent = '';
+              return;
+            }
+
+            const { text, rationale } = extractDisplayFromContent(content);
+            const color = statusEmoji === '🔴' ? '#e55353' : (statusEmoji === '🟢' ? '#0fa77a' : '#fff');
+
+            setAnswer(text, color);
+            rationaleEl.innerHTML = rationale || '';
+            renderMath();
+          }
+        }catch(err){
+          console.error('Parse error:', err);
+          setAnswer('Error', '#e55353');
+          rationaleEl.textContent = err.message || '';
+        }
+      };
+
+      es.onerror = () => {
+        statusText.textContent = 'Reconnecting...';
+        es.close();
+        setTimeout(connect, 3000);
+      };
+    }
+
+    connect();
+
+    setInterval(()=>{
+      if(es && es.readyState === 2){ // CLOSED
+        connect();
+      }
+    }, 5000);
   </script>
+
+  <!-- MathJax for rendering fractions, equations, etc. -->
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 </body>
 </html>
