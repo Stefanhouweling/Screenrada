@@ -120,13 +120,24 @@
     async function startVideoCapture(){
       try{
         status('📹 Requesting video capture device access…');
+        console.log('Starting video capture process...');
         
-        // Request video input device (this will include USB capture cards)
-        // To specifically target capture devices, you may need to enumerate devices
+        // Check if mediaDevices is available
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('getUserMedia not supported in this browser. Try Chrome or Edge.');
+        }
+        
+        // First, enumerate devices to see what's available
+        console.log('Enumerating video devices...');
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoDevices = devices.filter(d => d.kind === 'videoinput');
         
         console.log('Available video devices:', videoDevices);
+        console.log('Total video devices found:', videoDevices.length);
+        
+        if (videoDevices.length === 0) {
+          throw new Error('No video devices found. Make sure your USB capture device is connected.');
+        }
         
         // Request the video stream - user will select their capture device
         const constraints = {
@@ -138,14 +149,28 @@
           audio: false
         };
         
+        console.log('Requesting user media with constraints:', constraints);
+        status('📹 Browser asking for camera permission...');
+        
         stream = await navigator.mediaDevices.getUserMedia(constraints);
+        console.log('Stream obtained:', stream);
+        
         track = stream.getVideoTracks()[0];
+        console.log('Video track:', track);
+        console.log('Track settings:', track.getSettings());
+        
         v.srcObject = stream;
+        console.log('Video source set');
+        
         startBtn.style.display = 'none';
         questionSection.style.display = 'flex';
         answersDiv.style.display = 'block';
         
-        await v.play().catch(()=>{});
+        status('📹 Video loading...');
+        await v.play().catch((err)=>{
+          console.error('Video play error:', err);
+        });
+        console.log('Video playing');
         
         // Handle user stopping the stream
         track.addEventListener('ended', () => {
@@ -157,14 +182,31 @@
           busy = false;
         });
         
+        status('⏳ Waiting for video dimensions...');
         await waitForDims(v);
+        console.log('Video dimensions:', v.videoWidth, 'x', v.videoHeight);
+        
         setCanvasSizeToVideo();
+        console.log('Canvas size set:', f.width, 'x', f.height);
+        
         status('✅ Video capture ready. I'll snap when the content stops changing.');
         loop();
       }catch(e){
         status('❌ Video capture error: ' + (e.message || e));
-        console.error(e);
-        console.log('Make sure your USB capture device is connected and you granted camera permissions.');
+        console.error('Full error details:', e);
+        console.error('Error name:', e.name);
+        console.error('Error message:', e.message);
+        
+        // Provide specific guidance based on error type
+        if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+          status('❌ Permission denied. Please allow camera access and reload the page.');
+        } else if (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError') {
+          status('❌ No camera found. Make sure your USB capture device is connected.');
+        } else if (e.name === 'NotReadableError' || e.name === 'TrackStartError') {
+          status('❌ Camera already in use by another application.');
+        } else {
+          status('❌ Error: ' + e.message);
+        }
       }
     }
 
