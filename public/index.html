@@ -3,155 +3,186 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Screenrada — Direct Screen Capture</title>
+  <title>Screenrada — Scroll-Stop Camera</title>
   <style>
     body{margin:0;background:#0b0b0c;color:#fff;font-family:-apple-system,system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;gap:1rem;padding:1rem}
-    video{width:90vw;max-width:1200px;border-radius:10px;background:#000}
+    video{width:90vw;max-width:900px;border-radius:10px;background:#000}
     #status{font-size:14px;opacity:.9}
-    #link a{color:#2c7be5;text-decoration:none;font-weight:600}
-    #start{border:1px solid #444;padding:.6rem 1rem;border-radius:9px;cursor:pointer;background:#111}
   </style>
 </head>
 <body>
-  <h2>🖥️ Screenrada — Direct Screen Capture</h2>
-  <button id="start">Start screen capture</button>
-  <video id="screen" autoplay playsinline muted></video>
+  <h2>📷 Screenrada — Scroll-Stop Camera</h2>
+  <video id="cam" autoplay playsinline muted></video>
   <canvas id="frame" style="display:none"></canvas>
-  <div id="status">Idle.</div>
-  <div id="link">Open console → <a href="/console.html" target="_blank">/console.html</a></div>
+  <div id="status">Initializing camera…</div>
 
   <script>
-    const v = document.getElementById('screen');
+    const v = document.getElementById('cam');
     const f = document.getElementById('frame');
-    const ctx = f.getContext('2d');
+    const ctx = f.getContext('2d', { willReadFrequently: true });
     const statusEl = document.getElementById('status');
-    const startBtn = document.getElementById('start');
 
-    const GRID = 8, MOTION_STOP_DELTA = 0.10, STABLE_FRAMES = 4, COOL_DOWN_MS = 2000, RETAKE_DELAY_MS = 2000, RETAKE_DIFF = 0.20, SHARP_MIN = 200;
-    let lastHash = '', stableCount = 0, busy = false, lastShotAt = 0, hashAtShot = null, retakeTimer = null, stream = null, track = null;
+    const GRID = 8;
+    const MOTION_STOP_DELTA = 0.10;
+    const STABLE_FRAMES = 4;
+    const COOL_DOWN_MS = 2000;
+    const RETAKE_DELAY_MS = 5000;
+    const RETAKE_DIFF = 0.20;
 
-    startBtn.onclick = startScreen;
+    let lastHash = '';
+    let stableCount = 0;
+    let busy = false;
+    let lastShotAt = 0;
+    let hashAtShot = null;
+    let retakeTimer = null;
 
-    async function startScreen(){
+    async function startCamera(){
       try{
-        status('🖥️ Choose a screen/window/tab to capture…');
-        stream = await navigator.mediaDevices.getDisplayMedia({ video: { width: { ideal: 2560 }, height: { ideal: 1440 }, frameRate: { ideal: 30, max: 60 } }, audio: false });
-        track = stream.getVideoTracks()[0];
-        v.srcObject = stream;
-        startBtn.style.display = 'none';
-        await v.play().catch(()=>{});
-
-        track.addEventListener('ended', () => {
-          status('🛑 Screen share ended. Click "Start screen capture" to begin again.');
-          startBtn.style.display = 'inline-block';
-          cancelRetake(); busy = false;
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'environment',
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            focusMode: 'continuous' // may not be honored
+          },
+          audio: false
         });
-
-        await waitForDims(v);
-        setCanvasSizeToVideo();
-        status('✅ Screen ready. I’ll snap when the content stops changing.');
-        loop();
-      }catch(e){ status('❌ Screen capture error: ' + e.message); console.error(e); }
-    }
-
-    function setCanvasSizeToVideo(){
-      const dpr = Math.max(1, window.devicePixelRatio || 1);
-      f.width  = Math.floor(v.videoWidth * dpr);
-      f.height = Math.floor(v.videoHeight * dpr);
-    }
-
-    async function waitForDims(videoEl){
-      for (let i=0;i<40;i++) { if (videoEl.videoWidth && videoEl.videoHeight) return; await waitMs(50); }
+        v.srcObject = stream;
+        v.onloadedmetadata = () => {
+          v.play().catch(e => console.error('Video play error:', e));
+          f.width = v.videoWidth;
+          f.height = v.videoHeight;
+          status('✅ Camera ready. Watching for scroll stop...');
+          loop();
+        };
+      } catch(e){
+        status('❌ Camera error: '+e.message);
+      }
     }
 
     function drawFullFrame(){
+      const vw = v.videoWidth || f.width;
+      const vh = v.videoHeight || f.height;
+      if (f.width !== vw || f.height !== vh) { f.width = vw; f.height = vh; }
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(v, 0, 0, f.width, f.height);
+      ctx.drawImage(v, 0, 0, vw, vh);
     }
 
     function getHash(){
-      const w=f.width, h=f.height, cw=Math.floor(w/GRID), ch=Math.floor(h/GRID);
-      const img=ctx.getImageData(0,0,w,h).data; let out='';
-      for(let gy=0; gy<GRID; gy++) for(let gx=0; gx<GRID; gx++){
-        let sum=0, cnt=0, sy=gy*ch, sx=gx*cw;
-        for(let y=sy; y<Math.min(sy+ch,h); y++) for(let x=sx; x<Math.min(sx+cw,w); x++){
-          const i=(y*w+x)*4; sum += (img[i]+img[i+1]+img[i+2])/3; cnt++;
+      const w=f.width, h=f.height;
+      const cw = Math.floor(w/GRID), ch = Math.floor(h/GRID);
+      const img = ctx.getImageData(0,0,w,h).data;
+      let out = '';
+      for(let gy=0; gy<GRID; gy++){
+        for(let gx=0; gx<GRID; gx++){
+          let sum=0, cnt=0, sy=gy*ch, sx=gx*cw;
+          for(let y=sy; y<sy+ch && y<h; y++){
+            for(let x=sx; x<sx+cw && x<w; x++){
+              const i=(y*w+x)*4;
+              sum += (img[i]+img[i+1]+img[i+2])/3;
+              cnt++;
+            }
+          }
+          out += Math.floor((sum/cnt)/32);
         }
-        out += Math.floor((sum/Math.max(1,cnt))/32);
       }
       return out;
     }
 
-    function diffHash(a,b){ if(!a||!b||a.length!==b.length) return 1; let d=0; for(let i=0;i<a.length;i++) if(a[i]!==b[i]) d++; return d/a.length; }
+    function diffHash(a,b){
+      if(!a || !b || a.length!==b.length) return 1;
+      let d=0; for(let i=0;i<a.length;i++) if(a[i]!==b[i]) d++;
+      return d/a.length;
+    }
 
-    function laplacianVariance(){
-      const w=f.width, h=f.height, {data}=ctx.getImageData(0,0,w,h);
-      const gray = new Float32Array(w*h);
-      for (let y=0, i=0, j=0; y<h; y++) for (let x=0; x<w; x++, i+=4, j++) gray[j] = (data[i]+data[i+1]+data[i+2])/3;
-      let sum=0, sumSq=0, count=0;
-      for (let y=1; y<h-1; y++) for (let x=1; x<w-1; x++){
-        const idx = y*w + x;
-        const L = -4*gray[idx]+gray[idx-1]+gray[idx+1]+gray[idx-w]+gray[idx+w];
-        sum+=L; sumSq+=L*L; count++;
+    function varianceOfLaplacian(){
+      const imgData = ctx.getImageData(0, 0, f.width, f.height);
+      const gray = [];
+      for (let i = 0; i < imgData.data.length; i += 4) {
+        const avg = (imgData.data[i] + imgData.data[i+1] + imgData.data[i+2]) / 3;
+        gray.push(avg);
       }
-      const mean = sum / count;
-      return (sumSq / count) - (mean*mean);
+      let sum = 0, sumSq = 0;
+      for (let i = 0; i < gray.length; i++) {
+        sum += gray[i];
+        sumSq += gray[i] * gray[i];
+      }
+      const mean = sum / gray.length;
+      const variance = (sumSq / gray.length) - (mean * mean);
+      return variance;
     }
 
     function loop(){
       drawFullFrame();
-      const h = getHash(), d = diffHash(h, lastHash);
+      const h = getHash();
+      const d = diffHash(h, lastHash);
+
       if (!busy && d <= MOTION_STOP_DELTA) {
-        if (++stableCount >= STABLE_FRAMES) { if (cooldownOver()) shoot(h); stableCount = 0; }
-      } else stableCount = 0;
+        if (++stableCount >= STABLE_FRAMES) {
+          maybeShoot(h);
+          stableCount = 0;
+        }
+      } else {
+        stableCount = 0;
+      }
+
       lastHash = h;
       requestAnimationFrame(loop);
     }
 
     function cooldownOver(){ return (Date.now() - lastShotAt) >= COOL_DOWN_MS; }
 
-    async function shoot(currentHash){
+    function maybeShoot(currentHash){
+      if (!cooldownOver()) return;
+      const sharpness = varianceOfLaplacian();
+      if (sharpness < 150) {
+        status('⚠️ Image blurry, retrying focus…');
+        setTimeout(() => shoot(currentHash), 200);
+      } else {
+        shoot(currentHash);
+      }
+    }
+
+    function shoot(currentHash){
       busy = true;
       lastShotAt = Date.now();
       hashAtShot = currentHash;
-      drawFullFrame();
-      let sharp = laplacianVariance();
-      if (sharp < SHARP_MIN){
-        status(`🔎 Soft frame (var=${Math.round(sharp)} < ${SHARP_MIN}). Re-draw…`);
-        await waitMs(100);
-        drawFullFrame();
-        sharp = laplacianVariance();
-        status(`🔍 Sharpness after redraw: var=${Math.round(sharp)}`);
-      } else {
-        status(`🟢 Stable & sharp (var=${Math.round(sharp)}). Sending…`);
-      }
+      status('📸 Capturing…');
 
       const base64 = f.toDataURL('image/png').split(',')[1];
-      await fetchAnswer(base64);
-      busy = false;
-    }
-
-    async function fetchAnswer(base64Image){
-      const res = await fetch('/ask', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ imageBase64: base64Image })
+      fetch('/ask', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ imageBase64: base64 })
+      }).then(async (r)=>{
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        status('✅ Sent. Watching for change (5s)…');
+        if (retakeTimer) clearTimeout(retakeTimer);
+        retakeTimer = setTimeout(checkForRetake, RETAKE_DELAY_MS);
+      }).catch(e=>{
+        status('❌ Send error: '+e.message);
+      }).finally(()=>{
+        busy = false;
       });
-
-      try {
-        const data = await res.json();
-        if (data && typeof data.answer === 'number') {
-          status(`✅ Final Answer: ${data.answer}`);
-        } else {
-          status(`⚠️ Unexpected response: ${JSON.stringify(data)}`);
-        }
-      } catch (err) {
-        status(`❌ Parse error: ${err.message}`);
-      }
     }
 
-    function cancelRetake(){ if (retakeTimer) { clearTimeout(retakeTimer); retakeTimer = null; } }
-    function waitMs(ms){ return new Promise(r=>setTimeout(r, ms)); }
+    function checkForRetake(){
+      drawFullFrame();
+      const newHash = getHash();
+      const change = diffHash(newHash, hashAtShot || '');
+      if (change > RETAKE_DIFF) {
+        status(`🔁 Big change (${Math.round(change*100)}%). Retaking…`);
+        if (cooldownOver()) shoot(newHash);
+      } else {
+        status(`⏹ No major change (${Math.round(change*100)}%). No retake.`);
+      }
+      hashAtShot = null;
+      retakeTimer = null;
+    }
+
+    function status(t){ statusEl.textContent = t; }
+
+    startCamera();
   </script>
 </body>
 </html>
