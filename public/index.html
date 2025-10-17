@@ -3,41 +3,96 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Video Capture Multi-Question AI</title>
+  <title>Screen Capture → AI → Console</title>
   <style>
-    body{margin:0;background:#0b0b0c;color:#fff;font-family:-apple-system,system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;gap:1rem;padding:1rem}
+    :root{
+      --card:#111; --muted:#1a1a1a; --border:#2a2a2a; --accent:#2c7be5;
+      --override:#ffd166; /* high-contrast gold for Override line */
+    }
+    body{
+      margin:0;background:#0b0b0c;color:#fff;
+      font-family:-apple-system,system-ui,sans-serif;
+      display:flex;flex-direction:column;align-items:center;gap:1rem;padding:1rem;
+    }
+    h2{margin:0 0 .2rem 0}
+    #start{border:1px solid #444;padding:.6rem 1rem;border-radius:9px;cursor:pointer;background:#111}
     video{width:90vw;max-width:1200px;border-radius:10px;background:#000}
     #status{font-size:14px;opacity:.9}
-    #start{border:1px solid #444;padding:.6rem 1rem;border-radius:9px;cursor:pointer;background:#111}
-    #questionSection{display:flex;flex-direction:column;gap:1rem;width:90vw;max-width:1200px;margin-top:1rem}
-    .questionInput{background:#1a1a1a;border:1px solid #444;color:#fff;padding:.8rem;border-radius:8px;font-size:14px;width:100%;box-sizing:border-box}
-    .questionInput::placeholder{color:#666}
-    #addQuestion{background:#2c7be5;border:none;padding:.6rem 1rem;border-radius:8px;cursor:pointer;color:#fff;font-weight:600}
-    .questionItem{background:#1a1a1a;padding:1rem;border-radius:8px;display:flex;gap:1rem;align-items:center}
-    .removeQuestion{background:#e53e3e;border:none;padding:.4rem .8rem;border-radius:6px;cursor:pointer;color:#fff;font-size:12px}
-    #answers{width:90vw;max-width:1200px;margin-top:1rem;background:#1a1a1a;padding:1rem;border-radius:8px;min-height:100px}
-    .answerBlock{margin-bottom:1.5rem;padding-bottom:1.5rem;border-bottom:1px solid #333}
-    .answerBlock:last-child{border-bottom:none}
-    .answerQuestion{color:#2c7be5;font-weight:600;margin-bottom:.5rem}
-    .answerText{color:#fff;line-height:1.6}
+
+    .row{width:90vw;max-width:1200px;display:grid;gap:1rem}
+    .card{background:var(--muted);border:1px solid var(--border);border-radius:12px;padding:1rem}
+
+    .consoleHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem}
+    .pill{font-size:12px;border:1px solid var(--border);padding:.2rem .5rem;border-radius:999px;opacity:.85}
+    .muted{color:#bbb}
+
+    /* BIG centered AI answer */
+    #answerWrap{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:120px}
+    .answerBig{
+      font-size:68px;font-weight:900;line-height:1;text-align:center;
+      text-shadow:0 0 40px rgba(44,123,229,.25);margin:.25rem 0 .5rem 0;
+    }
+
+    /* Override line */
+    .overrideLine{
+      font-size:40px;font-weight:800;line-height:1.1;text-align:center;
+      color:var(--override);word-break:break-word;
+    }
+    .overrideLabel{font-size:14px;letter-spacing:.08em;opacity:.9;margin-bottom:.2rem;text-transform:uppercase}
+
+    /* Override input row */
+    .ovRow{display:flex;gap:.5rem;align-items:center;margin:.25rem 0 1rem 0}
+    .ovInput{
+      flex:1;background:#141414;border:1px solid #3a3a3a;color:#fff;
+      border-radius:10px;padding:.7rem .9rem;font-size:16px;
+    }
+    .btn{background:var(--accent);border:none;color:#fff;border-radius:10px;padding:.65rem 1rem;cursor:pointer;font-weight:700}
+    .btn.secondary{background:#444}
+
+    pre{margin:0;white-space:pre-wrap;word-break:break-word}
+    code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
   </style>
 </head>
 <body>
-  <h2>📹 Video Capture Multi-Question AI</h2>
+  <h2>📹 Screen Capture → AI → Console</h2>
   <button id="start">Start Video Capture</button>
   <video id="screen" autoplay playsinline muted></video>
   <canvas id="frame" style="display:none"></canvas>
   <div id="status">Idle.</div>
-  
-  <div id="questionSection" style="display:none">
-    <h3>Questions to Ask AI:</h3>
-    <div id="questionList"></div>
-    <button id="addQuestion">+ Add Question</button>
-  </div>
 
-  <div id="answers" style="display:none">
-    <h3>AI Answers:</h3>
-    <div id="answerList"></div>
+  <div class="row">
+    <div class="card">
+      <div class="consoleHead">
+        <div>
+          <span class="pill">AI Console</span>
+          <span class="muted" id="lastTime" style="margin-left:.5rem"></span>
+        </div>
+        <div>
+          <button class="btn" id="copyAnswer">Copy Answer</button>
+          <button class="btn" id="copyJava" style="margin-left:.4rem">Copy Java</button>
+        </div>
+      </div>
+
+      <!-- BIG centered AI answer + Override line -->
+      <div id="answerWrap">
+        <div class="muted">Waiting for first stable frame…</div>
+      </div>
+
+      <!-- Override input controls -->
+      <div class="ovRow">
+        <input id="ovInput" class="ovInput" placeholder="Type an override (press Enter or click Set)…">
+        <button class="btn" id="setOverride">Set</button>
+        <button class="btn secondary" id="clearOverride">Clear</button>
+      </div>
+
+      <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0">
+
+      <!-- Java snippet -->
+      <div>
+        <div class="muted" style="margin-bottom:.25rem">Java Snippet</div>
+        <pre><code id="javaOut">// (will appear after first AI response)</code></pre>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -45,19 +100,21 @@
     const v = document.getElementById('screen');
     const f = document.getElementById('frame');
     let ctx;
-    try {
-      ctx = f.getContext('2d', { willReadFrequently: true });
-      if (!ctx) throw new Error('2D context null with options');
-    } catch (err) {
-      ctx = f.getContext('2d');
-    }
+    try { ctx = f.getContext('2d', { willReadFrequently: true }); if(!ctx) throw 0; }
+    catch { ctx = f.getContext('2d'); }
+
     const statusEl = document.getElementById('status');
     const startBtn = document.getElementById('start');
-    const questionSection = document.getElementById('questionSection');
-    const questionList = document.getElementById('questionList');
-    const addQuestionBtn = document.getElementById('addQuestion');
-    const answersDiv = document.getElementById('answers');
-    const answerList = document.getElementById('answerList');
+    const answerWrap = document.getElementById('answerWrap');
+    const javaOut = document.getElementById('javaOut');
+    const lastTime = document.getElementById('lastTime');
+    const copyAnswerBtn = document.getElementById('copyAnswer');
+    const copyJavaBtn = document.getElementById('copyJava');
+
+    // Override controls
+    const ovInput = document.getElementById('ovInput');
+    const setOverrideBtn = document.getElementById('setOverride');
+    const clearOverrideBtn = document.getElementById('clearOverride');
 
     // ----- Tuning -----
     const GRID = 8;
@@ -77,354 +134,177 @@
     let retakeTimer = null;
     let stream = null;
     let track = null;
-    let questions = [];
-    let questionCounter = 0;
 
-    // ----- Question Management -----
-    function addQuestion(text) {
-      text = text || '';
-      const id = ++questionCounter;
-      const question = { id: id, text: text };
-      questions.push(question);
-      
-      const div = document.createElement('div');
-      div.className = 'questionItem';
-      div.dataset.id = id;
-      div.innerHTML = '<input type="text" class="questionInput" placeholder="Enter your question..." value="' + text + '"><button class="removeQuestion">Remove</button>';
-      
-      const input = div.querySelector('.questionInput');
-      input.addEventListener('input', function(e) {
-        const q = questions.find(function(q) { return q.id === id; });
-        if (q) q.text = e.target.value;
-      });
-      
-      const removeBtn = div.querySelector('.removeQuestion');
-      removeBtn.addEventListener('click', function() {
-        questions = questions.filter(function(q) { return q.id !== id; });
-        div.remove();
-      });
-      
-      questionList.appendChild(div);
-    }
+    let lastAnswerText = '';
+    let lastJavaText   = '';
 
-    addQuestionBtn.onclick = function() { addQuestion(); };
+    // override state
+    let overrideText = '';
 
-    // Add one default question
-    addQuestion('What is shown on the screen?');
-
-    // ----- Video Capture (USB/Webcam Device) -----
+    // ----- Video start -----
     startBtn.onclick = startVideoCapture;
 
     async function startVideoCapture(){
       try{
         status('📹 Requesting video capture device access…');
-        console.log('Starting video capture process...');
-        
-        // Check if mediaDevices is available
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          throw new Error('getUserMedia not supported in this browser. Try Chrome or Edge.');
-        }
-        
-        // First, enumerate devices to see what is available
-        console.log('Enumerating video devices...');
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error('getUserMedia not supported. Try Chrome/Edge.');
         const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = devices.filter(function(d) { return d.kind === 'videoinput'; });
-        
-        console.log('Available video devices:', videoDevices);
-        console.log('Total video devices found:', videoDevices.length);
-        
-        if (videoDevices.length === 0) {
-          throw new Error('No video devices found. Make sure your USB capture device is connected.');
-        }
-        
-        // Request the video stream - user will select their capture device
-        const constraints = {
-          video: {
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            frameRate: { ideal: 30 }
-          },
-          audio: false
-        };
-        
-        console.log('Requesting user media with constraints:', constraints);
-        status('📹 Browser asking for camera permission...');
-        
+        if (!devices.some(d => d.kind === 'videoinput')) throw new Error('No video devices found.');
+        const constraints = { video: { width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30} }, audio:false };
+        status('📹 Browser asking for camera permission…');
         stream = await navigator.mediaDevices.getUserMedia(constraints);
-        console.log('Stream obtained:', stream);
-        
         track = stream.getVideoTracks()[0];
-        console.log('Video track:', track);
-        console.log('Track settings:', track.getSettings());
-        
         v.srcObject = stream;
-        console.log('Video source set');
-        
         startBtn.style.display = 'none';
-        questionSection.style.display = 'flex';
-        answersDiv.style.display = 'block';
-        
-        status('📹 Video loading...');
-        await v.play().catch(function(err){
-          console.error('Video play error:', err);
-        });
-        console.log('Video playing');
-        
-        // Handle user stopping the stream
-        track.addEventListener('ended', function() {
-          status('🛑 Video capture ended. Click "Start Video Capture" to begin again.');
-          startBtn.style.display = 'inline-block';
-          questionSection.style.display = 'none';
-          answersDiv.style.display = 'none';
-          cancelRetake();
-          busy = false;
-        });
-        
-        status('⏳ Waiting for video dimensions...');
-        await waitForDims(v);
-        console.log('Video dimensions:', v.videoWidth, 'x', v.videoHeight);
-        
+        status('📹 Video loading…'); await v.play().catch(()=>{});
+        track.addEventListener('ended', () => { status('🛑 Video ended.'); startBtn.style.display='inline-block'; cancelRetake(); busy=false; });
+        status('⏳ Waiting for video dimensions…'); await waitForDims(v);
         setCanvasSizeToVideo();
-        console.log('Canvas size set:', f.width, 'x', f.height);
-        
-        status('✅ Video capture ready. I will snap when the content stops changing.');
+        status('✅ Ready. I will snap when the content stops changing.');
         loop();
-      }catch(e){
-        status('❌ Video capture error: ' + (e.message || e));
-        console.error('Full error details:', e);
-        console.error('Error name:', e.name);
-        console.error('Error message:', e.message);
-        
-        // Provide specific guidance based on error type
-        if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
-          status('❌ Permission denied. Please allow camera access and reload the page.');
-        } else if (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError') {
-          status('❌ No camera found. Make sure your USB capture device is connected.');
-        } else if (e.name === 'NotReadableError' || e.name === 'TrackStartError') {
-          status('❌ Camera already in use by another application.');
-        } else {
-          status('❌ Error: ' + e.message);
-        }
-      }
+      }catch(e){ status('❌ Video capture error: ' + (e.message || e)); }
     }
 
     function setCanvasSizeToVideo(){
       const dpr = Math.max(1, window.devicePixelRatio || 1);
-      const vw = v.videoWidth;
-      const vh = v.videoHeight;
-      f.width  = Math.floor(vw * dpr);
-      f.height = Math.floor(vh * dpr);
+      f.width  = Math.floor(v.videoWidth  * dpr);
+      f.height = Math.floor(v.videoHeight * dpr);
     }
-
     async function waitForDims(videoEl){
-      for (let i=0; i<40; i++){
-        if (videoEl.videoWidth && videoEl.videoHeight) return;
-        await waitMs(50);
-      }
+      for (let i=0;i<40;i++){ if (videoEl.videoWidth && videoEl.videoHeight) return; await waitMs(50); }
     }
 
-    // ----- Draw & hash -----
-    function drawFullFrame(){
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(v, 0, 0, f.width, f.height);
-    }
-
+    // ----- Frame ops -----
+    function drawFullFrame(){ ctx.imageSmoothingEnabled=false; ctx.drawImage(v,0,0,f.width,f.height); }
     function getHash(){
-      const w = f.width;
-      const h = f.height;
-      const cw = Math.max(1, Math.floor(w/GRID));
-      const ch = Math.max(1, Math.floor(h/GRID));
-      const img = ctx.getImageData(0,0,w,h).data;
-      let out = '';
-      for(let gy=0; gy<GRID; gy++){
-        for(let gx=0; gx<GRID; gx++){
-          let sum=0;
-          let cnt=0;
-          let sy=gy*ch;
-          let sx=gx*cw;
-          for(let y=sy; y<Math.min(sy+ch,h); y++){
-            for(let x=sx; x<Math.min(sx+cw,w); x++){
-              const i=(y*w+x)*4;
-              sum += (img[i]+img[i+1]+img[i+2])/3;
-              cnt++;
-            }
-          }
-          out += Math.floor((sum/Math.max(1,cnt))/32);
+      const w=f.width,h=f.height,cw=Math.max(1,Math.floor(w/GRID)),ch=Math.max(1,Math.floor(h/GRID));
+      const img=ctx.getImageData(0,0,w,h).data; let out='';
+      for(let gy=0;gy<GRID;gy++) for(let gx=0;gx<GRID;gx++){
+        let sum=0,cnt=0,sy=gy*ch,sx=gx*cw;
+        for(let y=sy;y<Math.min(sy+ch,h);y++) for(let x=sx;x<Math.min(sx+cw,w);x++){
+          const i=(y*w+x)*4; sum+=(img[i]+img[i+1]+img[i+2])/3; cnt++;
         }
+        out += Math.floor((sum/Math.max(1,cnt))/32);
       }
       return out;
     }
-
-    function diffHash(a,b){
-      if(!a || !b || a.length !== b.length) return 1;
-      let d=0;
-      for(let i=0; i<a.length; i++) {
-        if(a[i] !== b[i]) d++;
-      }
-      return d/a.length;
-    }
-
+    function diffHash(a,b){ if(!a||!b||a.length!==b.length) return 1; let d=0; for(let i=0;i<a.length;i++) if(a[i]!==b[i]) d++; return d/a.length; }
     function laplacianVariance(){
-      const w = f.width;
-      const h = f.height;
-      const imgData = ctx.getImageData(0, 0, w, h);
-      const data = imgData.data;
-      const gray = new Float32Array(w*h);
-      for (let y=0, i=0, j=0; y<h; y++){
-        for (let x=0; x<w; x++, i+=4, j++){
-          gray[j] = (data[i] + data[i+1] + data[i+2]) / 3;
-        }
+      const w=f.width,h=f.height, id=ctx.getImageData(0,0,w,h), data=id.data, gray=new Float32Array(w*h);
+      for(let y=0,i=0,j=0;y<h;y++){ for(let x=0;x<w;x++,i+=4,j++){ gray[j]=(data[i]+data[i+1]+data[i+2])/3; } }
+      let sum=0,sumSq=0,count=0;
+      for(let y=1;y<h-1;y++) for(let x=1;x<h-1;x++){
+        const idx=y*w+x, L=-4*gray[idx]+gray[idx-1]+gray[idx+1]+gray[idx-w]+gray[idx+w];
+        sum+=L; sumSq+=L*L; count++;
       }
-      let sum=0;
-      let sumSq=0;
-      let count=0;
-      for (let y=1; y<h-1; y++){
-        for (let x=1; x<w-1; x++){
-          const idx = y*w + x;
-          const L = -4*gray[idx] + gray[idx-1] + gray[idx+1] + gray[idx-w] + gray[idx+w];
-          sum += L;
-          sumSq += L*L;
-          count++;
-        }
-      }
-      const mean = sum / count;
-      return (sumSq / count) - (mean*mean);
+      const mean=sum/count; return (sumSq/count)-(mean*mean);
     }
 
-    // ----- Core loop -----
+    // ----- Main loop -----
     function loop(){
       drawFullFrame();
-      const h = getHash();
-      const d = diffHash(h, lastHash);
-      if (!busy && d <= MOTION_STOP_DELTA) {
-        if (++stableCount >= STABLE_FRAMES) {
-          maybeShoot(h);
-          stableCount = 0;
-        }
-      } else {
-        stableCount = 0;
-      }
-      lastHash = h;
+      const h=getHash(), d=diffHash(h,lastHash);
+      if(!busy && d<=MOTION_STOP_DELTA){ if(++stableCount>=STABLE_FRAMES){ maybeShoot(h); stableCount=0; } }
+      else { stableCount=0; }
+      lastHash=h;
       requestAnimationFrame(loop);
     }
+    const cooldownOver = ()=> (Date.now()-lastShotAt)>=COOL_DOWN_MS;
+    function maybeShoot(h){ if(!cooldownOver()) return; shoot(h); }
 
-    // ----- Shooting logic -----
-    function cooldownOver(){ return (Date.now() - lastShotAt) >= COOL_DOWN_MS; }
-
-    function maybeShoot(currentHash){
-      if (!cooldownOver()) return;
-      shoot(currentHash);
-    }
+    let lastShotAt = 0;
+    let hashAtShot = null;
 
     async function shoot(currentHash){
-      busy = true;
-      lastShotAt = Date.now();
-      hashAtShot = currentHash;
-      
+      busy=true; lastShotAt=Date.now(); hashAtShot=currentHash;
       try{
         drawFullFrame();
-        let sharp = laplacianVariance();
-        if (sharp < SHARP_MIN){
-          status('🔎 Soft frame (var=' + Math.round(sharp) + ' < ' + SHARP_MIN + '). Re-draw…');
-          await waitMs(100);
-          drawFullFrame();
-          sharp = laplacianVariance();
-          status('🔍 Sharpness after redraw: var=' + Math.round(sharp));
-        }else{
-          status('🟢 Stable & sharp (var=' + Math.round(sharp) + '). Capturing…');
+        let sharp=laplacianVariance();
+        if(sharp<SHARP_MIN){ status('🔎 Soft frame (var='+Math.round(sharp)+'). Re-draw…'); await waitMs(100); drawFullFrame(); }
+        else { status('🟢 Stable & sharp. Capturing…'); }
+
+        const base64=f.toDataURL('image/png').split(',')[1];
+
+        status('📤 Sending image to AI…');
+        const resp = await fetch('/ask', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ imageBase64: base64 }) });
+        if(!resp.ok) throw new Error('Server error: '+resp.status+' '+resp.statusText);
+        const data = await resp.json();
+
+        const answer = (data.answer ?? data.result ?? data.final ?? data?.answers?.[0]?.answer ?? '').toString().trim();
+        let java   = (data.java ?? data.code?.java ?? data.snippet ?? '').toString();
+        if(!java){
+          const safe = answer || '/* unknown */';
+          java =
+`// Java (Selenium) — fallback
+String answer = "${safe}";
+System.out.println("AI answer: " + answer);
+WebElement choice = driver.findElement(By.xpath("//label[normalize-space()='" + answer + "']"));
+choice.click();`;
         }
+        lastAnswerText = answer || '(no answer returned)';
+        lastJavaText   = java;
+        renderConsole();
 
-        const base64 = f.toDataURL('image/png').split(',')[1];
-        
-        // Filter out empty questions
-        const activeQuestions = questions.filter(function(q) { return q.text.trim(); });
-        
-        if (activeQuestions.length === 0) {
-          status('⚠️ No questions entered. Add at least one question.');
-          busy = false;
-          return;
-        }
+        console.log('[AI ANSWER]', lastAnswerText);
+        console.log('[AI JAVA]\\n' + lastJavaText);
 
-        status('📤 Sending image with ' + activeQuestions.length + ' question(s) to AI…');
-
-        // Send image and all questions to AI
-        const response = await fetch('/ask', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ 
-            imageBase64: base64,
-            questions: activeQuestions.map(function(q) { return q.text; })
-          })
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          displayAnswers(data.answers);
-          status('✅ Sent. Watching for ≥20% change (2s)…');
-        } else {
-          status('❌ Server error: ' + response.statusText);
-        }
-
-        cancelRetake();
-        retakeTimer = setTimeout(checkForRetake, RETAKE_DELAY_MS);
-      }catch(e){
-        status('❌ Capture/Send error: ' + e.message);
-        console.error(e);
-      }finally{
-        busy = false;
-      }
+        status('✅ Sent. Watching for ≥20% change (2s)…');
+        cancelRetake(); retakeTimer=setTimeout(checkForRetake, RETAKE_DELAY_MS);
+      }catch(e){ status('❌ Capture/Send error: ' + (e.message||e)); console.error(e); }
+      finally{ busy=false; }
     }
 
-    function displayAnswers(answers) {
-      answerList.innerHTML = '';
-      
-      if (!answers || answers.length === 0) {
-        answerList.innerHTML = '<p style="color:#999">No answers received yet.</p>';
-        return;
+    function renderConsole(){
+      // rebuild console block each time to keep layout consistent
+      answerWrap.innerHTML = '';
+
+      const big = document.createElement('div');
+      big.className = 'answerBig';
+      big.textContent = lastAnswerText || '(no answer)';
+      answerWrap.appendChild(big);
+
+      if(overrideText){
+        const lab = document.createElement('div');
+        lab.className = 'overrideLabel';
+        lab.textContent = 'Override:';
+        answerWrap.appendChild(lab);
+
+        const over = document.createElement('div');
+        over.className = 'overrideLine';
+        over.textContent = overrideText;
+        answerWrap.appendChild(over);
       }
 
-      answers.forEach(function(answer, index) {
-        const block = document.createElement('div');
-        block.className = 'answerBlock';
-        
-        const questionDiv = document.createElement('div');
-        questionDiv.className = 'answerQuestion';
-        questionDiv.textContent = 'Q' + (index + 1) + ': ' + answer.question;
-        
-        const answerDiv = document.createElement('div');
-        answerDiv.className = 'answerText';
-        answerDiv.textContent = answer.answer;
-        
-        block.appendChild(questionDiv);
-        block.appendChild(answerDiv);
-        answerList.appendChild(block);
-      });
+      javaOut.textContent = lastJavaText || '// (no java provided)';
+      lastTime.textContent = new Date().toLocaleTimeString();
     }
 
     function checkForRetake(){
       drawFullFrame();
-      const newHash = getHash();
-      const change = diffHash(newHash, hashAtShot || '');
-      if (change >= RETAKE_DIFF) {
-        status('🔁 Change ' + Math.round(change*100) + '% ≥ 20%. Taking one retake…');
-        if (cooldownOver()) shoot(newHash);
-      } else {
-        status('⏹ Change ' + Math.round(change*100) + '% < 20%. No retake.');
-      }
-      hashAtShot = null;
-      cancelRetake();
+      const newHash=getHash();
+      const change=diffHash(newHash, hashAtShot||'');
+      if(change>=RETAKE_DIFF){ status('🔁 Change '+Math.round(change*100)+'% ≥ 20%. Retake…'); if(cooldownOver()) shoot(newHash); }
+      else { status('⏹ Change '+Math.round(change*100)+'% < 20%. No retake.'); }
+      hashAtShot=null; cancelRetake();
     }
+    function cancelRetake(){ if(retakeTimer){ clearTimeout(retakeTimer); retakeTimer=null; } }
+    function waitMs(ms){ return new Promise(r=>setTimeout(r,ms)); }
+    function status(t){ statusEl.textContent=t; }
 
-    function cancelRetake(){
-      if (retakeTimer) {
-        clearTimeout(retakeTimer);
-        retakeTimer = null;
-      }
+    // ----- Copy & Override controls -----
+    copyAnswerBtn.addEventListener('click', () =>
+      navigator.clipboard?.writeText(lastAnswerText||'').then(()=>status('📋 Answer copied.')).catch(()=>{}));
+    copyJavaBtn.addEventListener('click', () =>
+      navigator.clipboard?.writeText(lastJavaText||'').then(()=>status('📋 Java copied.')).catch(()=>{}));
+
+    function setOverride(text){
+      overrideText = (text||'').trim();
+      renderConsole();
+      if(overrideText) console.log('[OVERRIDE]', overrideText);
     }
-
-    // ----- Helpers -----
-    function status(t){ statusEl.textContent = t; }
-    function waitMs(ms){ return new Promise(function(r) { setTimeout(r, ms); }); }
+    setOverrideBtn.addEventListener('click', () => setOverride(ovInput.value));
+    clearOverrideBtn.addEventListener('click', () => { ovInput.value=''; setOverride(''); });
+    ovInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ setOverride(ovInput.value); } });
   </script>
 </body>
 </html>
