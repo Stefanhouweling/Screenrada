@@ -13,7 +13,10 @@
     .btn{ border:1px solid #444;padding:.6rem 1rem;border-radius:9px;cursor:pointer;background:#111;color:#fff;font-weight:600 }
     .btn.primary{ background:var(--accent); border-color:transparent; }
     .btn.warn{ background:#7a1212; border-color:#aa2d2d; }
+    .btn.ghost{ background:#0f0f10; border-color:#333; }
     .slider{ width:140px; }
+    select{ background:#111; color:#fff; border:1px solid #444; border-radius:9px; padding:.5rem .75rem; }
+    label{ font-size:12px; opacity:.85; margin-right:.25rem; }
     video{ width:100vw;max-width:none;height:auto;display:block;border-radius:0;background:#000 }
     #status{ font-size:14px;opacity:.9 }
     .row{ width:90vw;max-width:1200px;display:grid;gap:1rem }
@@ -50,9 +53,15 @@
     <button id="pause" class="btn" style="display:none">⏸️ Pause Capture</button>
     <button id="blackout" class="btn warn" title="Toggle console blackout">🕶️ Blackout Console</button>
 
-    <!-- Local audio monitor controls -->
+    <!-- HDMI audio monitor controls (local only) -->
     <button id="audioToggle" class="btn" title="Toggle local audio monitor">🔇 Monitor Audio (OFF)</button>
     <input id="audioVol" class="slider" type="range" min="0" max="1" step="0.01" value="1" />
+
+    <!-- Source selection -->
+    <label for="videoSelect">Video Source:</label>
+    <select id="videoSelect"></select>
+    <button id="applySource" class="btn ghost" title="Rebind HDMI audio to the selected video source">Apply Source</button>
+    <button id="refreshDevs" class="btn ghost" title="Refresh device list">↻</button>
   </div>
 
   <video id="screen" autoplay playsinline muted></video>
@@ -108,6 +117,11 @@
     const audioToggle=document.getElementById('audioToggle');
     const audioVol=document.getElementById('audioVol');
 
+    // Source selection
+    const videoSelect=document.getElementById('videoSelect');
+    const applySourceBtn=document.getElementById('applySource');
+    const refreshDevsBtn=document.getElementById('refreshDevs');
+
     // Tuning
     const GRID=8, MOTION_STOP_DELTA=0.10, STABLE_FRAMES=4, COOL_DOWN_MS=2000, RETAKE_DELAY_MS=2000, RETAKE_DIFF=0.20, SHARP_MIN=200;
 
@@ -116,10 +130,11 @@
     let lastAnswerText='', lastJavaText='', overrideText='';
     let paused=false, blackout=false;
 
-    // Audio monitor state
+    // Audio monitor state (HDMI only)
     let audioEl=null;         // <audio> element (hidden) for local playback
-    let audioMonStream=null;  // MediaStream with audio tracks only
+    let audioMonStream=null;  // MediaStream with HDMI audio track
     let audioEnabled=false;   // monitor toggled ON/OFF
+    let currentVideoDeviceId=null;
 
     renderConsole();
 
@@ -128,7 +143,56 @@
       catch(e){}
     }
 
-    startBtn.onclick=startVideoCapture;
+    // ---------- Device helpers ----------
+    function likelyCaptureLabel(label=""){
+      const L=label.toLowerCase();
+      return L.includes("hdmi") || L.includes("capture") || L.includes("elgato") || L.includes("usb video") || L.includes("avermedia") || L.includes("camlink");
+    }
+
+    async function refreshDevices(){
+      try{
+        const devs=await navigator.mediaDevices.enumerateDevices();
+        const videos=devs.filter(d=>d.kind==="videoinput");
+        // Populate select
+        videoSelect.innerHTML="";
+        // Prefer capture-like labels first
+        const sorted=[...videos].sort((a,b)=>{
+          const aCap=likelyCaptureLabel(a.label), bCap=likelyCaptureLabel(b.label);
+          if(aCap!==bCap) return aCap ? -1 : 1;
+          return a.label.localeCompare(b.label);
+        });
+        for(const d of sorted){
+          const opt=document.createElement("option");
+          opt.value=d.deviceId;
+          opt.textContent=d.label || `Camera ${videoSelect.length+1}`;
+          videoSelect.appendChild(opt);
+        }
+        // Select current if exists, else first "capture", else first
+        const match = currentVideoDeviceId && sorted.find(d=>d.deviceId===currentVideoDeviceId);
+        if(match){ videoSelect.value=currentVideoDeviceId; }
+        else{
+          const firstCap=sorted.find(d=>likelyCaptureLabel(d.label));
+          videoSelect.value = (firstCap?.deviceId) || (sorted[0]?.deviceId || "");
+        }
+      }catch(e){
+        console.warn("Device enumeration failed:", e);
+      }
+    }
+
+    refreshDevsBtn.onclick = async () => {
+      await refreshDevices();
+      status("🔄 Devices refreshed.");
+    };
+
+    applySourceBtn.onclick = async () => {
+      if(!videoSelect.value){ status("⚠️ No video source selected."); return; }
+      await stopStreams();
+      currentVideoDeviceId = videoSelect.value;
+      await startVideoCapture(true); // restart with chosen device
+    };
+
+    // ---------- UI handlers ----------
+    startBtn.onclick = () => startVideoCapture(false);
     pauseBtn.onclick=togglePause;
     blackoutBtn.onclick=toggleBlackout;
 
@@ -159,97 +223,125 @@
       }
     }
 
-    async function startVideoCapture(){
+    // ---------- Capture ----------
+    async function startVideoCapture(reuseSelection){
       try{
         status('📹 Requesting video capture device access…');
         if(!navigator.mediaDevices?.getUserMedia) throw new Error('getUserMedia not supported. Use Chrome/Edge or HTTPS/localhost.');
-        const devices=await navigator.mediaDevices.enumerateDevices();
-        if(!devices.some(d=>d.kind==='videoinput')) throw new Error('No video devices found.');
 
-        // Request video + audio (audio only for local monitor; never uploaded/stored)
-        const constraints={
-          video:{ width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30} },
-          audio:{
-            echoCancellation:true,
-            noiseSuppression:true,
-            autoGainControl:false,
-            sampleRate:48000
-          }
+        // 1) Start VIDEO ONLY to avoid grabbing the mic
+        const constraints = {
+          video: currentVideoDeviceId || reuseSelection ? { deviceId: { exact: currentVideoDeviceId || videoSelect.value }, width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30} }
+                                                       : { width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30} },
+          audio: false
         };
 
-        status('📹 Browser asking for camera/mic permission…');
-        const streamObj=await navigator.mediaDevices.getUserMedia(constraints);
-        stream=streamObj; track=stream.getVideoTracks()[0];
-        v.srcObject=stream; startBtn.style.display='none'; pauseBtn.style.display='inline-block';
+        status('📹 Browser asking for CAMERA permission…');
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        track = stream.getVideoTracks()[0];
+        v.srcObject = stream;
+        startBtn.style.display='none';
+        pauseBtn.style.display='inline-block';
+
         status('📹 Video loading…'); await v.play().catch(()=>{});
         track.addEventListener('ended',()=>{ status('🛑 Video ended.'); startBtn.style.display='inline-block'; pauseBtn.style.display='none'; cancelRetake(); busy=false; });
+
+        // 2) Now that we have permission, enumerate with labels visible
+        await refreshDevices();
+
+        // Cache the chosen video device id
+        if(!currentVideoDeviceId){
+          currentVideoDeviceId = track.getSettings?.().deviceId || videoSelect.value || null;
+        }
+
         status('⏳ Waiting for video dimensions…'); await waitForDims(v);
         setCanvasSizeToVideo(); status('✅ Ready. I will snap when the content stops changing.');
 
-        // Setup local audio monitor (plays locally; not stored/sent)
-        await setupAudioMonitor(track, stream);
+        // 3) Bind HDMI AUDIO that matches the selected video device (by groupId)
+        await setupHDMIAudioForCurrentVideo();
 
         loop();
-      }catch(e){ status('❌ Video capture error: ' + (e.message||e)); }
+      }catch(e){
+        status('❌ Video capture error: ' + (e.message||e));
+      }
     }
 
-    // Try to pair audio with the selected video device (capture cards often share groupId)
-    async function setupAudioMonitor(videoTrack, initialStream){
+    // Connect to the audioinput that shares the groupId with the selected videoinput
+    async function setupHDMIAudioForCurrentVideo(){
+      try{
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDev = devices.find(d => d.kind==='videoinput' && d.deviceId === (currentVideoDeviceId || videoSelect.value));
+        if(!videoDev){
+          status('⚠️ Could not identify current video device for HDMI audio.');
+          return;
+        }
+
+        let targetAudio = null;
+
+        // Prefer exact groupId match
+        if(videoDev.groupId){
+          targetAudio = devices.find(d => d.kind==='audioinput' && d.groupId === videoDev.groupId);
+        }
+
+        // If no group match, try best-effort label matching (HDMI/Capture/Elgato/etc.)
+        if(!targetAudio){
+          const candidates = devices.filter(d => d.kind==='audioinput' && likelyCaptureLabel(d.label));
+          // Pick the first candidate; optional: smarter heuristics
+          targetAudio = candidates[0] || null;
+        }
+
+        if(!targetAudio){
+          status('⚠️ No HDMI audio device found for the selected video source.');
+          // Leave audio off rather than using local mic (as requested)
+          await teardownAudioMonitor();
+          return;
+        }
+
+        // Request ONLY that specific audio device
+        const audioStream = await navigator.mediaDevices.getUserMedia({
+          audio: { deviceId: { exact: targetAudio.deviceId }, echoCancellation:true, noiseSuppression:true, autoGainControl:false, sampleRate:48000 },
+          video: false
+        });
+
+        await setupAudioMonitorElement(audioStream);
+        status('🔊 HDMI audio bound: ' + (targetAudio.label || 'HDMI Audio'));
+      }catch(err){
+        console.warn('HDMI audio setup failed:', err?.message || err);
+        status('⚠️ HDMI audio setup failed.');
+        await teardownAudioMonitor();
+      }
+    }
+
+    async function setupAudioMonitorElement(audioStream){
       if (!audioEl) {
         audioEl = new Audio();
         audioEl.autoplay = true;
-        audioEl.muted = !audioEnabled;            // start muted until toggled ON
-        audioEl.volume = Number(audioVol.value);
         audioEl.playsInline = true;
-        audioEl.style.display = 'none';           // hidden
+        audioEl.style.display = 'none';
         document.body.appendChild(audioEl);
       }
+      audioMonStream = audioStream;
+      audioEl.srcObject = audioMonStream;
+      audioEl.muted = !audioEnabled;                // respect the Monitor toggle
+      audioEl.volume = Number(audioVol.value);
+      if (audioEnabled) await audioEl.play().catch(()=>{});
+    }
 
-      // If initial stream already has audio tracks, use them
-      const existingAudio = initialStream.getAudioTracks?.() || [];
-      if (existingAudio.length) {
-        audioMonStream = new MediaStream(existingAudio);
-        audioEl.srcObject = audioMonStream;
-        if (audioEnabled) audioEl.play().catch(()=>{});
-        console.log('🎙️ Monitoring existing audio track:', existingAudio[0].label);
-        return;
+    async function teardownAudioMonitor(){
+      if(audioMonStream){
+        for(const t of audioMonStream.getTracks()) t.stop();
+        audioMonStream = null;
       }
+      if(audioEl){
+        audioEl.srcObject = null;
+      }
+    }
 
-      // Otherwise, search for an audioinput matching the selected video device's groupId
+    async function stopStreams(){
       try{
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const vidDeviceId = videoTrack?.getSettings?.().deviceId;
-        const videoDevice = devices.find(d => d.deviceId === vidDeviceId && d.kind === 'videoinput');
-
-        let targetAudio = null;
-        if (videoDevice?.groupId) {
-          targetAudio = devices.find(d => d.kind === 'audioinput' && d.groupId === videoDevice.groupId);
-        }
-
-        let audioStream;
-        if (targetAudio) {
-          audioStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              deviceId: { exact: targetAudio.deviceId },
-              echoCancellation:true, noiseSuppression:true, autoGainControl:false, sampleRate:48000
-            }, video:false
-          });
-          console.log('🎛️ Matched audio device:', targetAudio.label);
-        } else {
-          // Fallback to default mic if no paired device is found
-          audioStream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:false, sampleRate:48000 },
-            video:false
-          });
-          console.log('🎛️ Using default audio input');
-        }
-
-        audioMonStream = audioStream;
-        audioEl.srcObject = audioMonStream;
-        if (audioEnabled) audioEl.play().catch(()=>{});
-      }catch(err){
-        console.warn('Audio monitor setup failed:', err?.message || err);
-      }
+        if(stream){ for(const t of stream.getTracks()) t.stop(); stream=null; }
+        await teardownAudioMonitor();
+      }catch{}
     }
 
     function togglePause(){
@@ -261,6 +353,7 @@
     function setCanvasSizeToVideo(){ const dpr=Math.max(1,window.devicePixelRatio||1); f.width=Math.floor(v.videoWidth*dpr); f.height=Math.floor(v.videoHeight*dpr); }
     async function waitForDims(videoEl){ for(let i=0;i<40;i++){ if(videoEl.videoWidth&&videoEl.videoHeight) return; await waitMs(50);} }
 
+    // ----- Frame ops / hash / sharpness -----
     function drawFullFrame(){ ctx.imageSmoothingEnabled=false; ctx.drawImage(v,0,0,f.width,f.height); }
     function getHash(){
       const w=f.width,h=f.height,cw=Math.max(1,Math.floor(w/GRID)),ch=Math.max(1,Math.floor(h/GRID));
@@ -281,6 +374,7 @@
       const mean=sum/count; return (sumSq/count)-(mean*mean);
     }
 
+    // ----- Loop / shooting -----
     function loop(){
       drawFullFrame();
       const h=getHash(), d=diffHash(h,lastHash);
