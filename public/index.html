@@ -13,7 +13,7 @@
     .btn{ border:1px solid #444;padding:.6rem 1rem;border-radius:9px;cursor:pointer;background:#111;color:#fff;font-weight:600 }
     .btn.primary{ background:var(--accent); border-color:transparent; }
     .btn.warn{ background:#7a1212; border-color:#aa2d2d; }
-    video{ width:90vw;max-width:1200px;border-radius:10px;background:#000 }
+    video{ width:100vw;max-width:none;height:auto;display:block;border-radius:0;background:#000 }
     #status{ font-size:14px;opacity:.9 }
     .row{ width:90vw;max-width:1200px;display:grid;gap:1rem }
     .card{ background:var(--muted);border:1px solid var(--border);border-radius:12px;padding:1rem }
@@ -32,7 +32,7 @@
 
     /* Flashing red blackout indicator (AI side only) */
     #blackoutLamp {
-      position: fixed; top: 18px; right: 18px; width: 20px; height: 20px;
+      position: fixed; top: 18px; right: 18px; width: 50px; height: 50px;
       border-radius: 50%; background: #c21818; box-shadow: 0 0 14px rgba(255,0,0,.8);
       animation: pulse .5s ease-in-out infinite; display: none; z-index: 9999;
     }
