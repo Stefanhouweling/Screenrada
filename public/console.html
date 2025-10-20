@@ -8,172 +8,141 @@
     html,body{ height:100%; }
     body{
       margin:0;background:#000;color:#fff;font-family:-apple-system,system-ui,sans-serif;
-      display:flex;flex-direction:column;align-items:center;justify-content:center;
-      text-align:center;padding:20px; gap:20px;
+      display:flex;align-items:center;justify-content:center;
     }
-    #status{ font-size:28px;opacity:.9;display:flex;flex-direction:column;gap:8px;align-items:center; }
-    .chip{ background:#111;border:1px solid #333;border-radius:999px;padding:.25rem .8rem;font-size:18px }
-    .speed{ font-weight:800 }
-    .speed.fast{ color:#18c964 }     /* green */
-    .speed.medium{ color:#ff9800 }   /* orange */
-    .speed.slow{ color:#ff4d4f }     /* red */
-
-    #display{
-      max-width:90vw; max-height:65vh; display:flex; flex-direction:column;
-      align-items:center; justify-content:center; gap:14px;
+    /* Container that holds text when shown */
+    #stage{
+      width:100vw;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+      gap:14px; background:#000;
     }
-    #answer{ font-weight:900; line-height:1.06; text-shadow:0 0 40px rgba(44,123,229,.3); }
-    #overrideLabel{ font-size:16px; letter-spacing:.08em; opacity:.9; text-transform:uppercase; display:none; }
-    #override{ font-weight:800; line-height:1.06; color:#ffd166; display:none; }
+    #answer{ font-weight:900; line-height:1.06; text-shadow:0 0 40px rgba(44,123,229,.3); text-align:center; }
+    #override{ font-weight:800; line-height:1.06; color:#ffd166; text-align:center; }
+    #overrideLabel{ font-size:16px; letter-spacing:.08em; opacity:.9; text-transform:uppercase; text-align:center; }
 
-    .pulse{ animation:pulse 2s ease-in-out infinite; }
-    @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:.6} }
+    .hidden{ display:none !important; }
   </style>
 </head>
 <body>
-  <div id="status">
-    <div id="line1" class="chip">Idle</div>
-    <div id="line2" class="chip">—</div>
-    <div id="line3" class="chip">—</div>
-  </div>
-
-  <div id="display" aria-live="polite">
-    <div id="answer">Waiting…</div>
-    <div id="overrideLabel">Override:</div>
-    <div id="override"></div>
+  <div id="stage" class="hidden" aria-live="polite">
+    <div id="answer"></div>
+    <div id="overrideLabel" class="hidden">Override:</div>
+    <div id="override" class="hidden"></div>
   </div>
 
   <script>
-    const line1=document.getElementById('line1');
-    const line2=document.getElementById('line2');
-    const line3=document.getElementById('line3');
-    const display=document.getElementById('display');
+    const stage=document.getElementById('stage');
     const answerEl=document.getElementById('answer');
-    const overrideLabel=document.getElementById('overrideLabel');
     const overrideEl=document.getElementById('override');
+    const overrideLabel=document.getElementById('overrideLabel');
 
-    function setAnswer(text, color){
-      answerEl.textContent = text || 'No answer';
-      answerEl.classList.add('pulse');
-      setTimeout(()=>answerEl.classList.remove('pulse'), 2000);
-      answerEl.style.color = color || '#fff';
-      autoFit();
+    let currentAnswer=''; let currentOverride=''; let forceBlank=false;
+
+    // Show/hide entire stage (black background is body)
+    function applyBlank(){
+      const shouldShow = !forceBlank && (currentAnswer || currentOverride);
+      stage.classList.toggle('hidden', !shouldShow);
+      if(shouldShow) autoFit();
     }
 
+    function setAnswer(text){
+      currentAnswer = (text||'').trim();
+      answerEl.textContent = currentAnswer;
+      applyBlank();
+    }
     function setOverride(text){
-      const t=(text||'').trim();
-      if(t){
-        overrideLabel.style.display='block';
-        overrideEl.style.display='block';
-        overrideEl.textContent=t;
-      }else{
-        overrideLabel.style.display='none';
-        overrideEl.style.display='none';
-        overrideEl.textContent='';
-      }
-      autoFit();
+      currentOverride = (text||'').trim();
+      const on = !!currentOverride;
+      overrideLabel.classList.toggle('hidden', !on);
+      overrideEl.classList.toggle('hidden', !on);
+      overrideEl.textContent = currentOverride;
+      applyBlank();
     }
 
-    function extractNumberedListFromJSON(content){
-      let parsed;
-      try { parsed = JSON.parse(content); } catch {
-        const m = content.match(/^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$/i);
-        if(m){ try { parsed = JSON.parse(m[1]); } catch {} }
-      }
-      if(parsed){
-        if(Array.isArray(parsed.answers)){
-          const items = parsed.answers
-            .map((a,i)=>({ n: Number.isFinite(+a.number)?+a.number:(i+1), t: (a?.answer??'').toString().trim() }))
-            .filter(x=>x.t)
-            .sort((a,b)=>a.n-b.n);
-          if(items.length) return items.map(x=>`${x.n}. ${x.t}`).join('  ');
-        }
-        if(typeof parsed.answer==='string') return parsed.answer;
-      }
-      // Try plain text "1. foo" lines
-      const m2 = [...content.matchAll(/^\s*(\d+)\.\s*(.+)$/gm)].map(x=>`${x[1]}. ${x[2].trim()}`);
-      if(m2.length) return m2.join('  ');
-      return content;
-    }
-
-    // Auto-fit text inside #display
+    // Auto-fit both lines into viewport nicely
     function autoFit(){
       fitText(answerEl, 140, 24);
       fitText(overrideEl, 80, 18);
     }
     function fitText(el, maxPx, minPx){
-      if(!el || el.style.display==='none') return;
-      let size = maxPx;
-      const pad = 8;
-      el.style.fontSize = size + 'px';
-      const boxW = display.clientWidth - pad*2;
-      const boxH = display.clientHeight - pad*2;
+      if(!el || el.classList.contains('hidden') || !el.textContent) return;
+      let size=maxPx;
+      el.style.fontSize=size+'px';
+      const vw=window.innerWidth, vh=window.innerHeight;
       for(let i=0;i<60;i++){
-        const tooWide  = el.scrollWidth  > boxW;
-        const tooTall  = el.scrollHeight > boxH;
-        if(!(tooWide || tooTall)) break;
-        size = Math.max(minPx, size - 2);
-        el.style.fontSize = size + 'px';
-        if(size === minPx) break;
+        const r=el.getBoundingClientRect();
+        if(r.width<=vw*0.92 && r.height<=vh*0.7) break;
+        size=Math.max(minPx, size-2);
+        el.style.fontSize=size+'px';
+        if(size===minPx) break;
       }
     }
     window.addEventListener('resize', autoFit);
 
+    // Extract numbered list from model JSON or text
+    function extractNumbered(content){
+      if(typeof content==='string'){
+        let parsed;
+        try{ parsed=JSON.parse(content); }catch{
+          const m=content.match(/^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$/i);
+          if(m){ try{ parsed=JSON.parse(m[1]); }catch{} }
+        }
+        if(parsed?.answers && Array.isArray(parsed.answers)){
+          const items=parsed.answers
+            .map((a,i)=>({ n:Number.isFinite(+a.number)?+a.number:(i+1), t:(a?.answer??'').toString().trim() }))
+            .filter(x=>x.t).sort((a,b)=>a.n-b.n);
+          if(items.length) return items.map(x=>`${x.n}. ${x.t}`).join('  ');
+        }
+        const m2=[...content.matchAll(/^\s*(\d+)\.\s*(.+)$/gm)].map(x=>`${x[1]}. ${x[2].trim()}`);
+        if(m2.length) return m2.join('  ');
+        return content.trim();
+      }
+      try{ return JSON.stringify(content); }catch{ return ''; }
+    }
+
+    // SSE
     let es;
     function connect(){
       es = new EventSource('/events');
 
       es.onmessage = (msg) => {
         try{
-          const data = JSON.parse(msg.data);
+          const data=JSON.parse(msg.data);
 
-          // Status / override logs
-          if(data.type === 'log'){
-            if(data.event === 'change_detected'){
-              const pct = data.meta?.percent ?? '?';
-              line1.textContent = `Change detected (${pct}%)`;
-            } else if(data.event === 'photo_captured'){
-              line2.textContent = 'Photo captured';
-            } else if(data.event === 'sending_to_ai'){
-              line2.textContent = 'Sent to AI…';
-            } else if(data.event === 'internet_speed'){
-              const ms = data.meta?.ms ?? '?';
-              const sp = String(data.meta?.speed || '').toLowerCase();
-              line3.innerHTML = `Internet: <span class="speed ${sp}">${sp ? sp.toUpperCase() : '?'}</span> (${ms} ms)`;
-            } else if(data.event === 'override_set'){
-              setOverride(data.meta?.text || '');
-            } else if(data.event === 'override_clear'){
+          if(data.type==='log'){
+            if(data.event==='sending_to_ai'){
+              // Blank the screen while sending/awaiting
+              forceBlank = true;
+              applyBlank();
+            }else if(data.event==='override_set'){
+              setOverride(data.meta?.text||'');
+            }else if(data.event==='override_clear'){
               setOverride('');
             }
             return;
           }
 
-          // OpenAI payload → numbered answers
-          if(data.type === 'answer'){
-            const payload = data.payload;
+          if(data.type==='answer'){
+            forceBlank = false; // unblank on answer
+            const payload=data.payload;
             if(payload?.error){
-              setAnswer(payload.error?.message || 'OpenAI error', '#ff4d4f');
+              setAnswer((payload.error?.message||'').trim());
               return;
             }
-            const content = payload?.choices?.[0]?.message?.content;
-            if(!content){ setAnswer('No Content', '#ff4d4f'); return; }
-            const text = extractNumberedListFromJSON(content);
-            setAnswer(text, '#fff');
+            const content=payload?.choices?.[0]?.message?.content;
+            if(!content){ setAnswer(''); return; }
+            const txt=extractNumbered(content);
+            setAnswer(txt);
           }
-        }catch(err){
-          setAnswer('Error', '#ff4d4f');
+        }catch(e){
+          // On any parse issues, blank
+          setAnswer('');
         }
       };
 
-      es.onerror = () => {
-        line1.textContent = 'Reconnecting…';
-        es.close();
-        setTimeout(connect, 3000);
-      };
+      es.onerror=()=>{ es.close(); setTimeout(connect,3000); };
     }
-
     connect();
-    setInterval(()=>{ if(es && es.readyState === 2){ connect(); } }, 5000);
+    setInterval(()=>{ if(es && es.readyState===2){ connect(); } },5000);
   </script>
 </body>
 </html>
