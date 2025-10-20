@@ -9,9 +9,10 @@
     body{ margin:0;background:#0b0b0c;color:#fff;font-family:-apple-system,system-ui,sans-serif;
           display:flex;flex-direction:column;align-items:center;gap:1rem;padding:1rem; }
     h2{ margin:0 0 .2rem 0 }
-    .controls{ display:flex; gap:.5rem; }
+    .controls{ display:flex; gap:.5rem; flex-wrap:wrap; }
     .btn{ border:1px solid #444;padding:.6rem 1rem;border-radius:9px;cursor:pointer;background:#111;color:#fff;font-weight:600 }
     .btn.primary{ background:var(--accent); border-color:transparent; }
+    .btn.warn{ background:#7a1212; border-color:#aa2d2d; }
     video{ width:90vw;max-width:1200px;border-radius:10px;background:#000 }
     #status{ font-size:14px;opacity:.9 }
     .row{ width:90vw;max-width:1200px;display:grid;gap:1rem }
@@ -28,14 +29,25 @@
     .ovInput{ flex:1;background:#141414;border:1px solid #3a3a3a;color:#fff;border-radius:10px;padding:.7rem .9rem;font-size:16px; }
     pre{ margin:0;white-space:pre-wrap;word-break:break-word }
     code{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
+
+    /* Flashing red blackout indicator (AI side only) */
+    #blackoutLamp {
+      position: fixed; top: 18px; right: 18px; width: 16px; height: 16px;
+      border-radius: 50%; background: #c21818; box-shadow: 0 0 14px rgba(255,0,0,.8);
+      animation: pulse 1.2s ease-in-out infinite; display: none; z-index: 9999;
+    }
+    @keyframes pulse{ 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.35;transform:scale(.7)} }
   </style>
 </head>
 <body>
   <h2>📹 Screen Capture → AI → Console</h2>
 
+  <div id="blackoutLamp" title="Console is currently blacked out"></div>
+
   <div class="controls">
     <button id="start" class="btn primary">Start Video Capture</button>
     <button id="pause" class="btn" style="display:none">⏸️ Pause Capture</button>
+    <button id="blackout" class="btn warn" title="Toggle console blackout">🕶️ Blackout Console</button>
   </div>
 
   <video id="screen" autoplay playsinline muted></video>
@@ -78,6 +90,8 @@
     const statusEl=document.getElementById('status');
     const startBtn=document.getElementById('start');
     const pauseBtn=document.getElementById('pause');
+    const blackoutBtn=document.getElementById('blackout');
+    const blackoutLamp=document.getElementById('blackoutLamp');
     const answerWrap=document.getElementById('answerWrap');
     const javaOut=document.getElementById('javaOut');
     const lastTime=document.getElementById('lastTime');
@@ -91,19 +105,33 @@
     // State
     let lastHash='', stableCount=0, busy=false, lastShotAt=0, hashAtShot=null, retakeTimer=null, stream=null, track=null;
     let lastAnswerText='', lastJavaText='', overrideText='';
-    let paused=false;
+    let paused=false, blackout=false;
 
     renderConsole();
 
-    // Log helper -> console viewer
     async function logConsole(event, meta){
       try{ await fetch('/log',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({event, meta})}); }
       catch(e){}
     }
 
-    // Start video
     startBtn.onclick=startVideoCapture;
     pauseBtn.onclick=togglePause;
+    blackoutBtn.onclick=toggleBlackout;
+
+    function toggleBlackout(){
+      blackout = !blackout;
+      if(blackout){
+        logConsole('blackout_on', {});
+        blackoutBtn.textContent='🕶️ Blackout Console (ON)';
+        blackoutBtn.classList.add('warn');
+        blackoutLamp.style.display='block'; // AI-side reminder only
+      }else{
+        logConsole('blackout_off', {});
+        blackoutBtn.textContent='🕶️ Blackout Console';
+        blackoutBtn.classList.remove('warn');
+        blackoutLamp.style.display='none';
+      }
+    }
 
     async function startVideoCapture(){
       try{
@@ -113,11 +141,9 @@
         if(!devices.some(d=>d.kind==='videoinput')) throw new Error('No video devices found.');
         const constraints={ video:{ width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30} }, audio:false };
         status('📹 Browser asking for camera permission…');
-        stream=await navigator.mediaDevices.getUserMedia(constraints);
-        track=stream.getVideoTracks()[0];
-        v.srcObject=stream;
-        startBtn.style.display='none';
-        pauseBtn.style.display='inline-block';
+        const streamObj=await navigator.mediaDevices.getUserMedia(constraints);
+        stream=streamObj; track=stream.getVideoTracks()[0];
+        v.srcObject=stream; startBtn.style.display='none'; pauseBtn.style.display='inline-block';
         status('📹 Video loading…'); await v.play().catch(()=>{});
         track.addEventListener('ended',()=>{ status('🛑 Video ended.'); startBtn.style.display='inline-block'; pauseBtn.style.display='none'; cancelRetake(); busy=false; });
         status('⏳ Waiting for video dimensions…'); await waitForDims(v);
@@ -128,19 +154,13 @@
 
     function togglePause(){
       paused = !paused;
-      if(paused){
-        status('⏸️ Paused. No AI requests will be made.');
-        pauseBtn.textContent='▶️ Resume Capture';
-      }else{
-        status('▶️ Resumed. Watching for stable frame…');
-        pauseBtn.textContent='⏸️ Pause Capture';
-      }
+      if(paused){ status('⏸️ Paused. No AI requests will be made.'); pauseBtn.textContent='▶️ Resume Capture'; }
+      else{ status('▶️ Resumed. Watching for stable frame…'); pauseBtn.textContent='⏸️ Pause Capture'; }
     }
 
     function setCanvasSizeToVideo(){ const dpr=Math.max(1,window.devicePixelRatio||1); f.width=Math.floor(v.videoWidth*dpr); f.height=Math.floor(v.videoHeight*dpr); }
     async function waitForDims(videoEl){ for(let i=0;i<40;i++){ if(videoEl.videoWidth&&videoEl.videoHeight) return; await waitMs(50);} }
 
-    // Frame ops
     function drawFullFrame(){ ctx.imageSmoothingEnabled=false; ctx.drawImage(v,0,0,f.width,f.height); }
     function getHash(){
       const w=f.width,h=f.height,cw=Math.max(1,Math.floor(w/GRID)),ch=Math.max(1,Math.floor(h/GRID));
@@ -161,22 +181,19 @@
       const mean=sum/count; return (sumSq/count)-(mean*mean);
     }
 
-    // Main loop
     function loop(){
       drawFullFrame();
       const h=getHash(), d=diffHash(h,lastHash);
-
       if(!paused){
         if(!busy && d<=MOTION_STOP_DELTA){
           if(++stableCount>=STABLE_FRAMES){ maybeShoot(h); stableCount=0; }
         }else{
-          const changePct = Math.round(d*100);
+          const changePct=Math.round(d*100);
           if(changePct >= Math.round(RETAKE_DIFF*100)) logConsole('change_detected', { percent: changePct });
           stableCount=0;
         }
       }
-      lastHash=h;
-      requestAnimationFrame(loop);
+      lastHash=h; requestAnimationFrame(loop);
     }
     const cooldownOver=()=> (Date.now()-lastShotAt)>=COOL_DOWN_MS;
     function maybeShoot(h){ if(!cooldownOver()) return; if(paused) return; shoot(h); }
@@ -194,16 +211,17 @@
 
         const base64=f.toDataURL('image/png').split(',')[1];
 
-        // Tell console to go fully black while sending/awaiting
-        await logConsole('sending_to_ai', { blank:true });
-        const t0=performance.now();
+        // Do NOT blank the console on send; answer stays LOCKED until next one
+        await logConsole('sending_to_ai', {});
 
+        const t0=performance.now();
         let resp;
         try{
           resp=await fetch('/ask',{ method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body: JSON.stringify({ imageBase64: base64 }) });
         }catch(netErr){
           status('❌ Network error calling /ask');
-          lastAnswerText='(network error)'; lastJavaText='// could not reach /ask'; renderConsole(); return;
+          // keep lastAnswerText unchanged (locked)
+          lastJavaText='// could not reach /ask'; renderConsole(); return;
         }
 
         const ms=Math.max(1, Math.round(performance.now()-t0));
@@ -216,17 +234,17 @@
           .filter(x=>x.t)
           .sort((a,b)=>a.n-b.n);
 
-        lastAnswerText = items.length ? items.map(x=>`${x.n}. ${x.t}`).join('  ') : '';
-        lastJavaText   = lastAnswerText
-          ? `// info\nString answers = "${lastAnswerText.replace(/"/g,'\\"')}";\nSystem.out.println(answers);`
-          : '// (no answer returned)';
-        renderConsole();
+        if(items.length){
+          lastAnswerText = items.map(x=>`${x.n}. ${x.t}`).join('  ');
+          lastJavaText   = `// info\nString answers = "${lastAnswerText.replace(/"/g,'\\"')}";\nSystem.out.println(answers);`;
+          renderConsole();
+        }
 
-        status('✅ Sent. Watching for ≥20% change (2s)…');
+        status('✅ Answer updated. Watching for ≥20% change (2s)…');
         cancelRetake(); retakeTimer=setTimeout(checkForRetake, RETAKE_DELAY_MS);
       }catch(e){
         status('❌ Capture/Send error: ' + (e.message||e));
-        lastAnswerText=''; lastJavaText='// '+(e.message||e); renderConsole();
+        // keep last answer locked
       }finally{ busy=false; }
     }
 
