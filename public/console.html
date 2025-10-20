@@ -10,10 +10,9 @@
       margin:0;background:#000;color:#fff;font-family:-apple-system,system-ui,sans-serif;
       display:flex;align-items:center;justify-content:center;
     }
-    /* Container that holds text when shown */
     #stage{
       width:100vw;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
-      gap:14px; background:#000;
+      gap:14px;background:#000;
     }
     #answer{ font-weight:900; line-height:1.06; text-shadow:0 0 40px rgba(44,123,229,.3); text-align:center; }
     #override{ font-weight:800; line-height:1.06; color:#ffd166; text-align:center; }
@@ -35,19 +34,19 @@
     const overrideEl=document.getElementById('override');
     const overrideLabel=document.getElementById('overrideLabel');
 
-    let currentAnswer=''; let currentOverride=''; let forceBlank=false;
+    let currentAnswer=''; let currentOverride=''; let blackout=false;
 
-    // Show/hide entire stage (black background is body)
-    function applyBlank(){
-      const shouldShow = !forceBlank && (currentAnswer || currentOverride);
-      stage.classList.toggle('hidden', !shouldShow);
-      if(shouldShow) autoFit();
+    function applyVisibility(){
+      const hasContent = !!(currentAnswer || currentOverride);
+      const showStage = !blackout && hasContent;
+      stage.classList.toggle('hidden', !showStage);
+      if(showStage) autoFit();
     }
 
     function setAnswer(text){
       currentAnswer = (text||'').trim();
       answerEl.textContent = currentAnswer;
-      applyBlank();
+      applyVisibility();
     }
     function setOverride(text){
       currentOverride = (text||'').trim();
@@ -55,18 +54,17 @@
       overrideLabel.classList.toggle('hidden', !on);
       overrideEl.classList.toggle('hidden', !on);
       overrideEl.textContent = currentOverride;
-      applyBlank();
+      applyVisibility();
     }
 
-    // Auto-fit both lines into viewport nicely
+    // Auto-fit both lines into viewport
     function autoFit(){
       fitText(answerEl, 140, 24);
       fitText(overrideEl, 80, 18);
     }
     function fitText(el, maxPx, minPx){
       if(!el || el.classList.contains('hidden') || !el.textContent) return;
-      let size=maxPx;
-      el.style.fontSize=size+'px';
+      let size=maxPx; el.style.fontSize=size+'px';
       const vw=window.innerWidth, vh=window.innerHeight;
       for(let i=0;i<60;i++){
         const r=el.getBoundingClientRect();
@@ -78,7 +76,6 @@
     }
     window.addEventListener('resize', autoFit);
 
-    // Extract numbered list from model JSON or text
     function extractNumbered(content){
       if(typeof content==='string'){
         let parsed;
@@ -109,33 +106,29 @@
           const data=JSON.parse(msg.data);
 
           if(data.type==='log'){
-            if(data.event==='sending_to_ai'){
-              // Blank the screen while sending/awaiting
-              forceBlank = true;
-              applyBlank();
-            }else if(data.event==='override_set'){
-              setOverride(data.meta?.text||'');
-            }else if(data.event==='override_clear'){
-              setOverride('');
-            }
+            if(data.event==='blackout_on'){ blackout=true; applyVisibility(); }
+            else if(data.event==='blackout_off'){ blackout=false; applyVisibility(); }
+            else if(data.event==='override_set'){ setOverride(data.meta?.text||''); }
+            else if(data.event==='override_clear'){ setOverride(''); }
+            // ignore other logs to keep screen clean
             return;
           }
 
           if(data.type==='answer'){
-            forceBlank = false; // unblank on answer
+            // Update the locked answer only when new content arrives
             const payload=data.payload;
             if(payload?.error){
-              setAnswer((payload.error?.message||'').trim());
+              const txt = (payload.error?.message||'').trim();
+              if(txt) setAnswer(txt);
               return;
             }
             const content=payload?.choices?.[0]?.message?.content;
-            if(!content){ setAnswer(''); return; }
+            if(!content) return; // keep old answer
             const txt=extractNumbered(content);
-            setAnswer(txt);
+            if(txt) setAnswer(txt);
           }
         }catch(e){
-          // On any parse issues, blank
-          setAnswer('');
+          // keep existing locked answer
         }
       };
 
