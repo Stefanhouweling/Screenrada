@@ -9,7 +9,9 @@
     body{ margin:0;background:#0b0b0c;color:#fff;font-family:-apple-system,system-ui,sans-serif;
           display:flex;flex-direction:column;align-items:center;gap:1rem;padding:1rem; }
     h2{ margin:0 0 .2rem 0 }
-    #start{ border:1px solid #444;padding:.6rem 1rem;border-radius:9px;cursor:pointer;background:#111 }
+    .controls{ display:flex; gap:.5rem; }
+    .btn{ border:1px solid #444;padding:.6rem 1rem;border-radius:9px;cursor:pointer;background:#111;color:#fff;font-weight:600 }
+    .btn.primary{ background:var(--accent); border-color:transparent; }
     video{ width:90vw;max-width:1200px;border-radius:10px;background:#000 }
     #status{ font-size:14px;opacity:.9 }
     .row{ width:90vw;max-width:1200px;display:grid;gap:1rem }
@@ -24,15 +26,18 @@
     .overrideLine{ font-size:40px;font-weight:800;line-height:1.1;text-align:center;color:var(--override);word-break:break-word; }
     .ovRow{ display:flex;gap:.5rem;align-items:center;margin:.25rem 0 1rem 0 }
     .ovInput{ flex:1;background:#141414;border:1px solid #3a3a3a;color:#fff;border-radius:10px;padding:.7rem .9rem;font-size:16px; }
-    .btn{ background:var(--accent);border:none;color:#fff;border-radius:10px;padding:.65rem 1rem;cursor:pointer;font-weight:700 }
-    .btn.secondary{ background:#444 }
     pre{ margin:0;white-space:pre-wrap;word-break:break-word }
     code{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
   </style>
 </head>
 <body>
   <h2>📹 Screen Capture → AI → Console</h2>
-  <button id="start">Start Video Capture</button>
+
+  <div class="controls">
+    <button id="start" class="btn primary">Start Video Capture</button>
+    <button id="pause" class="btn" style="display:none">⏸️ Pause Capture</button>
+  </div>
+
   <video id="screen" autoplay playsinline muted></video>
   <canvas id="frame" style="display:none"></canvas>
   <div id="status">Idle.</div>
@@ -52,8 +57,8 @@
 
       <div class="ovRow">
         <input id="ovInput" class="ovInput" placeholder="Type an override (Enter or click Set)…">
-        <button class="btn" id="setOverride">Set</button>
-        <button class="btn secondary" id="clearOverride">Clear</button>
+        <button class="btn primary" id="setOverride">Set</button>
+        <button class="btn" id="clearOverride">Clear</button>
       </div>
 
       <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0">
@@ -72,6 +77,7 @@
     let ctx; try{ ctx=f.getContext('2d',{willReadFrequently:true}); if(!ctx) throw 0; }catch{ ctx=f.getContext('2d'); }
     const statusEl=document.getElementById('status');
     const startBtn=document.getElementById('start');
+    const pauseBtn=document.getElementById('pause');
     const answerWrap=document.getElementById('answerWrap');
     const javaOut=document.getElementById('javaOut');
     const lastTime=document.getElementById('lastTime');
@@ -85,8 +91,8 @@
     // State
     let lastHash='', stableCount=0, busy=false, lastShotAt=0, hashAtShot=null, retakeTimer=null, stream=null, track=null;
     let lastAnswerText='', lastJavaText='', overrideText='';
+    let paused=false;
 
-    // Render once
     renderConsole();
 
     // Log helper -> console viewer
@@ -97,6 +103,8 @@
 
     // Start video
     startBtn.onclick=startVideoCapture;
+    pauseBtn.onclick=togglePause;
+
     async function startVideoCapture(){
       try{
         status('📹 Requesting video capture device access…');
@@ -107,13 +115,26 @@
         status('📹 Browser asking for camera permission…');
         stream=await navigator.mediaDevices.getUserMedia(constraints);
         track=stream.getVideoTracks()[0];
-        v.srcObject=stream; startBtn.style.display='none';
+        v.srcObject=stream;
+        startBtn.style.display='none';
+        pauseBtn.style.display='inline-block';
         status('📹 Video loading…'); await v.play().catch(()=>{});
-        track.addEventListener('ended',()=>{ status('🛑 Video ended.'); startBtn.style.display='inline-block'; cancelRetake(); busy=false; });
+        track.addEventListener('ended',()=>{ status('🛑 Video ended.'); startBtn.style.display='inline-block'; pauseBtn.style.display='none'; cancelRetake(); busy=false; });
         status('⏳ Waiting for video dimensions…'); await waitForDims(v);
         setCanvasSizeToVideo(); status('✅ Ready. I will snap when the content stops changing.');
         loop();
       }catch(e){ status('❌ Video capture error: ' + (e.message||e)); }
+    }
+
+    function togglePause(){
+      paused = !paused;
+      if(paused){
+        status('⏸️ Paused. No AI requests will be made.');
+        pauseBtn.textContent='▶️ Resume Capture';
+      }else{
+        status('▶️ Resumed. Watching for stable frame…');
+        pauseBtn.textContent='⏸️ Pause Capture';
+      }
     }
 
     function setCanvasSizeToVideo(){ const dpr=Math.max(1,window.devicePixelRatio||1); f.width=Math.floor(v.videoWidth*dpr); f.height=Math.floor(v.videoHeight*dpr); }
@@ -144,18 +165,21 @@
     function loop(){
       drawFullFrame();
       const h=getHash(), d=diffHash(h,lastHash);
-      if(!busy && d<=MOTION_STOP_DELTA){
-        if(++stableCount>=STABLE_FRAMES){ maybeShoot(h); stableCount=0; }
-      }else{
-        const changePct = Math.round(d*100);
-        if(changePct >= Math.round(RETAKE_DIFF*100)) logConsole('change_detected', { percent: changePct });
-        stableCount=0;
+
+      if(!paused){
+        if(!busy && d<=MOTION_STOP_DELTA){
+          if(++stableCount>=STABLE_FRAMES){ maybeShoot(h); stableCount=0; }
+        }else{
+          const changePct = Math.round(d*100);
+          if(changePct >= Math.round(RETAKE_DIFF*100)) logConsole('change_detected', { percent: changePct });
+          stableCount=0;
+        }
       }
       lastHash=h;
       requestAnimationFrame(loop);
     }
     const cooldownOver=()=> (Date.now()-lastShotAt)>=COOL_DOWN_MS;
-    function maybeShoot(h){ if(!cooldownOver()) return; shoot(h); }
+    function maybeShoot(h){ if(!cooldownOver()) return; if(paused) return; shoot(h); }
 
     async function shoot(currentHash){
       busy=true; lastShotAt=Date.now(); hashAtShot=currentHash;
@@ -163,20 +187,20 @@
         drawFullFrame();
         let sharp=laplacianVariance();
         if(sharp<SHARP_MIN){ status('🔎 Soft frame (var='+Math.round(sharp)+'). Re-draw…'); await waitMs(100); drawFullFrame(); }
-        await logConsole('photo_captured', {}); status('🟢 Stable & sharp. Capturing…');
+        if(paused){ busy=false; return; }
 
-        const dataUrl=f.toDataURL('image/png');
-        const base64=dataUrl.split(',')[1];
+        await logConsole('photo_captured', {});
+        status('🟢 Stable & sharp. Capturing…');
 
-        await logConsole('sending_to_ai', {});
+        const base64=f.toDataURL('image/png').split(',')[1];
+
+        // Tell console to go fully black while sending/awaiting
+        await logConsole('sending_to_ai', { blank:true });
         const t0=performance.now();
 
-        // We can omit questions; server will auto-answer all numbered questions
         let resp;
         try{
-          resp=await fetch('/ask',{ method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
-            body: JSON.stringify({ imageBase64: base64 })
-          });
+          resp=await fetch('/ask',{ method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body: JSON.stringify({ imageBase64: base64 }) });
         }catch(netErr){
           status('❌ Network error calling /ask');
           lastAnswerText='(network error)'; lastJavaText='// could not reach /ask'; renderConsole(); return;
@@ -187,22 +211,22 @@
         await logConsole('internet_speed', { ms, speed });
 
         const data=await resp.json();
-
-        // Build numbered string: "1. foo  2. bar"
         const items=(data?.answers||[])
           .map((a,i)=>({ n: Number.isFinite(+a.number)?+a.number:(i+1), t: (a?.answer||'').toString().trim() }))
           .filter(x=>x.t)
           .sort((a,b)=>a.n-b.n);
 
-        lastAnswerText = items.length ? items.map(x=>`${x.n}. ${x.t}`).join('  ') : '(no answer returned)';
-        lastJavaText   = `// info\nString answers = "${lastAnswerText.replace(/"/g,'\\"')}";\nSystem.out.println(answers);`;
+        lastAnswerText = items.length ? items.map(x=>`${x.n}. ${x.t}`).join('  ') : '';
+        lastJavaText   = lastAnswerText
+          ? `// info\nString answers = "${lastAnswerText.replace(/"/g,'\\"')}";\nSystem.out.println(answers);`
+          : '// (no answer returned)';
         renderConsole();
 
         status('✅ Sent. Watching for ≥20% change (2s)…');
         cancelRetake(); retakeTimer=setTimeout(checkForRetake, RETAKE_DELAY_MS);
       }catch(e){
         status('❌ Capture/Send error: ' + (e.message||e));
-        lastAnswerText='(client error)'; lastJavaText='// '+(e.message||e); renderConsole();
+        lastAnswerText=''; lastJavaText='// '+(e.message||e); renderConsole();
       }finally{ busy=false; }
     }
 
@@ -211,7 +235,7 @@
       const newHash=getHash();
       const change=diffHash(newHash, hashAtShot||'');
       const changePct=Math.round(change*100);
-      if(change>=RETAKE_DIFF){ logConsole('change_detected',{percent:changePct}); if(cooldownOver()) shoot(newHash); }
+      if(!paused && change>=RETAKE_DIFF){ logConsole('change_detected',{percent:changePct}); if(cooldownOver()) shoot(newHash); }
       hashAtShot=null; cancelRetake();
     }
 
